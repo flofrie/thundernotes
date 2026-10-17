@@ -1,0 +1,27 @@
+{
+  "name": "@thundernotes/thunderbird",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
+    "@lezer/common": "1.5.3",
+    "@lezer/highlight": "1.2.5",
+    "@lezer/markdown": "1.7.2",
+    "@thundernotes/core": "0.0.0",
+    "fflate": "0.8.3"
+  },
+  "license": "MPL-2.0",
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "scripts": {
+    "build": "tsc -b && node build.mjs",
+    "watch": "tsc -b ../core && node build.mjs --watch",
+    "test": "vitest run",
+    "package": "npm run build && node package.mjs"
+  }
+}

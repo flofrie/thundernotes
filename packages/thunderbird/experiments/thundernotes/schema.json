@@ -1,0 +1,110 @@
+[
+  {
+    "namespace": "thundernotes",
+    "description": "ThunderNotes' only privileged code (D19, D26, D27): a message-list column, the carrier folder's global-search exclusion and prompt fetching.",
+    "functions": [
+      {
+        "name": "refreshColumn",
+        "type": "function",
+        "async": true,
+        "description": "Redraws the ThunderNotes column (after tags changed).",
+        "parameters": []
+      },
+      {
+        "name": "getGlobalSearch",
+        "type": "function",
+        "async": true,
+        "description": "Whether a folder is included in global search (Gloda).",
+        "parameters": [
+          {
+            "name": "folderId",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "setGlobalSearch",
+        "type": "function",
+        "async": true,
+        "description": "Same as the 'include in global search' checkbox in Folder Properties.",
+        "parameters": [
+          {
+            "name": "folderId",
+            "type": "string"
+          },
+          {
+            "name": "include",
+            "type": "boolean"
+          }
+        ]
+      },
+      {
+        "name": "prepareCarrierFolder",
+        "type": "function",
+        "async": true,
+        "description": "Carrier folder setup: excluded from global search, checked for new messages like the Inbox.",
+        "parameters": [
+          {
+            "name": "folderId",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "refreshFolder",
+        "type": "function",
+        "async": true,
+        "description": "Fetches a folder's new messages from the server now; resolves when done.",
+        "parameters": [
+          {
+            "name": "folderId",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "subscribeCarrierFolder",
+        "type": "function",
+        "async": true,
+        "description": "If a top-level folder of an IMAP account exists on the server but isn't subscribed (and so is hidden from add-ons), subscribes it as the Subscribe dialog would. Resolves 'visible', 'subscribed', 'missing' or 'notImap'.",
+        "parameters": [
+          { "name": "accountId", "type": "string" },
+          { "name": "name", "type": "string" }
+        ]
+      },
+      {
+        "name": "focusMessagePane",
+        "type": "function",
+        "async": true,
+        "description": "Gives the keyboard focus to the message shown in the current mail tab (e.g. back from the message list). Resolves whether it could.",
+        "parameters": []
+      },
+      {
+        "name": "focusCurrentTab",
+        "type": "function",
+        "async": true,
+        "description": "Gives the keyboard focus to the content of the current tab (the task view, just opened or brought to the front). Resolves whether it could.",
+        "parameters": []
+      },
+      {
+        "name": "deviceName",
+        "type": "function",
+        "async": true,
+        "description": "A default name for this device: the computer's name, plus the profile's when there are several profiles.",
+        "parameters": []
+      },
+      {
+        "name": "expungeFolder",
+        "type": "function",
+        "async": true,
+        "description": "Purges messages flagged as deleted from an IMAP folder on the server; resolves when done.",
+        "parameters": [
+          {
+            "name": "folderId",
+            "type": "string"
+          }
+        ]
+      }
+    ]
+  }
+]

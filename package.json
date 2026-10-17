@@ -1,0 +1,21 @@
+{
+  "name": "thundernotes",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Annotate emails with Markdown notes (Thunderbird first, Outlook later)",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc -b",
+    "test": "npm run test --workspaces --if-present",
+    "package": "npm run build -w @thundernotes/core && npm run package -w @thundernotes/thunderbird --"
+  },
+  "devDependencies": {
+    "jsdom": "30.1.1",
+    "typescript": "5.9.3",
+    "vitest": "5.0.2"
+  },
+  "license": "MPL-2.0"
+}

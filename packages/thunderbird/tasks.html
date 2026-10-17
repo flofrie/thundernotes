@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ThunderNotes Tasks</title>
+  <link rel="icon" href="icons/tasks.svg">
+  <style>
+    :root { color-scheme: light dark; --fg: #1f1f1f; --muted: #6b6b6b; --line: #00000014; --hover: #0000000a; --bg: #fff;
+            --accent: #0b57d0; --accent-bg: #e8f0fe; --red: #c92a2a; --chip: #0000000f; --chip-border: #00000024;
+            --badge-fg: #8c8c8c; --badge-bg: #00000007; --badge-border: #00000012; --hover-strong: #00000014; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg: #e8e8e8; --muted: #a0a0a0; --line: #ffffff1c; --hover: #ffffff0d; --bg: #1c1b22;
+              --accent: #8ab4f8; --accent-bg: #1f2b3d; --red: #ff8787; --chip: #ffffff14; --chip-border: #ffffff2e;
+              --badge-fg: #8a8a8a; --badge-bg: #ffffff09; --badge-border: #ffffff17; --hover-strong: #ffffff1c; }
+    }
+    body:focus { outline: none; }
+    body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+    main { max-width: 860px; margin: 0 auto; padding: 20px 24px 60px; }
+    header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 10px; }
+    h1 { font-size: 20px; margin: 0; flex: 1 1 auto; }
+    /* The filter: unused, a small lozenge with a funnel (the filter symbol, as on a spreadsheet
+       column); clicked or Cmd/Ctrl+F, the field opens in it; tinted while it filters. */
+    .search { position: relative; display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px 2px 8px; font-size: 12.5px; color: var(--muted);
+              border: 1px solid var(--chip-border); border-radius: 1em; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+    .search svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+    .search:not(:focus-within):not(.active) { gap: 0; padding: 3px 8px; }
+    /* A date clicked in a task, as a token in the pill. */
+    .search .token { white-space: nowrap; font-weight: 600; padding: 0 6px; border-radius: 1em; background: var(--chip);
+                     border: 1px solid var(--chip-border); color: var(--fg); cursor: pointer; }
+    .search .token .x { margin-left: 4px; font-weight: 400; opacity: 0.55; cursor: pointer; }
+    .search .token .x:hover { opacity: 1; color: var(--red); }
+    .tn-date[data-date] { cursor: pointer; }
+    #dateTokens { display: inline-flex; gap: 4px; }
+    #dateTokens:empty { display: none; }
+    /* Date suggestions under the filter: a date and what it means. */
+    .date-suggest { left: 0; width: 220px; }
+    .date-suggest .hint { float: right; color: var(--muted); font-size: 11px; margin-left: 8px; }
+    .search:not(:focus-within):not(.active) input { width: 0; }
+    .search:not(:focus-within):not(.active):hover { color: var(--fg); border-color: var(--muted); }
+    .search:focus-within, .search.active { cursor: text; }
+    .search input { font: inherit; color: var(--fg); background: transparent; border: none; outline: none; padding: 0; width: 120px;
+                    transition: width 0.15s; }
+    .search:focus-within { border-color: var(--accent); }
+    .search:focus-within input, .search.active input { width: 200px; }
+    .search.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+    /* A /regex/ that isn't valid (yet): red until it is. */
+    .search.active.invalid { border-color: var(--red); color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
+    .search button { font: inherit; font-size: 14px; line-height: 1; padding: 0 3px; border: none; background: none; color: inherit; cursor: pointer; }
+    /* position: relative makes the box the chips' offset parent: their lines are measured from it. */
+    #labels { position: relative; display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; min-height: 0; }
+    .order-btn { font: inherit; font-size: 13px; line-height: 1; padding: 2px 7px; cursor: pointer; color: var(--muted);
+                 background: transparent; border: 1px solid var(--chip-border); border-radius: 1em; }
+    .order-btn:hover { color: var(--fg); border-color: var(--muted); }
+    .label-chip[draggable="true"] { cursor: grab; }
+    .label-chip.dragging { opacity: 0.4; outline: 1px dashed var(--accent); }
+    .label-chip .n { margin-left: 5px; font-size: 11px; opacity: 0.65; font-weight: 400; }
+    .label-chip.next { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .label-chip.more { border-style: dashed; color: var(--muted); }
+    .label-chip[hidden] { display: none; }
+    .no-labels { color: var(--muted); font-size: 13px; }
+    .label-chip { font: inherit; font-size: 13px; padding: 1px 10px; border-radius: 1em; cursor: pointer;
+                  border: 1px solid var(--chip-border); background: var(--chip); color: inherit; }
+    /* Chosen as a filter: its own look (its colour, D40), with a strong red ring and bold text.
+       A box-shadow ring: a thicker border would change the chip's size and shift the row. */
+    .label-chip.on { box-shadow: 0 0 0 2px var(--red); font-weight: 600; }
+    /* Excluded: struck through in red, a dashed red ring, a little faded. */
+    .label-chip.not { outline: 2px dashed var(--red); outline-offset: 0; opacity: 0.8;
+                      text-decoration: line-through; text-decoration-color: var(--red); text-decoration-thickness: 2px; }
+    /* The switches below the labels, apart from them. */
+    #controls { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 4px 0 18px; }
+    .switch { display: inline-flex; align-items: center; font-size: 12px; color: var(--muted); }
+    .switch button { font: inherit; padding: 1px 9px; cursor: pointer; color: inherit; background: transparent; border: 1px solid var(--chip-border); }
+    .switch button:first-of-type { border-radius: 1em 0 0 1em; margin-left: 6px; }
+    .switch button:last-of-type { border-radius: 0 1em 1em 0; border-left: none; }
+    .switch button.current { color: var(--fg); font-weight: 600; background: var(--chip); }
+    .switch button:disabled:not(.current) { opacity: 0.4; cursor: default; }
+    /* Doesn't apply yet: completely greyed out. */
+    .switch.disabled { opacity: 0.4; }
+    .switch.disabled button { cursor: default; }
+    .switch.disabled button.current { font-weight: 400; background: transparent; }
+    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 22px 0 4px;
+         padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+    h2.overdue { color: var(--red); }
+    /* Sections by label or email: the label chip, or the email's subject (opens it) and sender. */
+    h2.label, h2.email { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--fg); }
+    h2 .email-title { font-weight: 600; cursor: pointer; }
+    h2 .email-title:hover { color: var(--accent); text-decoration: underline; }
+    h2 .email-meta { font-weight: 400; color: var(--muted); margin-left: 6px; }
+    /* The number of tasks: a small badge, not to be read as part of the heading (e.g. a date). */
+    /* Faded: paler than the uncoloured labels, so it doesn't stand out. */
+    h2 .count { font-size: 9.5px; font-weight: 400; letter-spacing: 0; line-height: 1.5; min-width: 1.5em; text-align: center;
+                padding: 0 5px; margin-left: 6px; border-radius: 1em; background: var(--badge-bg); border: 1px solid var(--badge-border);
+                color: var(--badge-fg); align-self: center; }
+    h2 .how { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; opacity: 0.8; margin-left: 4px; }
+    h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+    /* The Done group's "Sort" switch: on the right, in normal type. */
+    h2 .switch { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+    ul.tasks { list-style: none; margin: 0; padding: 0; }
+    /* Sub-tasks (D38): lines from the selected task in the margin left of the list, "part of", "2/5". */
+    #groups { position: relative; }
+    svg.task-lines { position: absolute; left: 0; top: 0; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: 1; }
+    svg.task-lines path { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    svg.task-lines path.sub { stroke: var(--accent); }
+    svg.task-lines path.parent { stroke: var(--muted); }
+    .meta .partof { font-style: italic; }
+    .subcount { display: inline-block; font-size: 11px; line-height: 1.4; padding: 0 6px; border-radius: 1em;
+                background: var(--chip); border: 1px solid var(--chip-border); color: var(--muted); vertical-align: 1px; text-decoration: none; }
+    .line-edge { position: fixed; right: 24px; bottom: 16px; z-index: 6; font: inherit; font-size: 12px; padding: 3px 10px;
+                 border-radius: 1em; border: 1px solid var(--accent); background: var(--accent-bg); color: var(--accent); cursor: pointer; }
+    .line-edge.up { bottom: auto; top: 6px; }
+    li.entry { display: flex; gap: 10px; padding: 7px 6px; border-radius: 6px; }
+    li.entry:hover { background: var(--hover); }
+    /* The selected task (keyboard navigation): a tint and a bar on the left. */
+    li.entry.selected { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); }
+    /* A label chip dragged over a task: dropped, the label is added. */
+    /* A label dragged out of a task: its task faded; off the list it goes. */
+    li.entry .text .tn-label[draggable="true"] { cursor: grab; }
+    li.entry.drag-source { opacity: 0.55; }
+    li.entry.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-bg); }
+    /* Scrolled to with the keys: not under the filters kept at the top. */
+    body.sticky-top li.entry, body.sticky-top #groups h2 { scroll-margin-top: 130px; }
+    /* The task box, as in the email (card.ts): drawn, green with a white tick when done. The row's
+       own box only (">"): the note preview inside the row has its own, smaller boxes. */
+    li.entry > .tn-box { flex: none; box-sizing: border-box; width: 1.1em; height: 1.1em; margin: 0.18em 0 0; padding: 0;
+                       border: 1.5px solid currentColor; border-radius: 3px; overflow: hidden; background: transparent; color: inherit;
+                       font: bold 1em/calc(1.1em - 3px) system-ui, sans-serif; text-align: center; cursor: pointer; opacity: 0.8; }
+    li.entry > .tn-box::before { content: "✓"; visibility: hidden; }
+    li.entry > .tn-box.tn-box-done { background: #2f9e44; border-color: #1e6e30; color: #fff; opacity: 1; }
+    li.entry > .tn-box.tn-box-done::before { visibility: visible; }
+    .body { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+    .text ul, .text li, .text p { margin: 0; padding: 0; list-style: none; display: inline; }
+    .text .task-box { display: none; }
+    .text code { font-size: 0.92em; background: var(--chip); padding: 0 3px; border-radius: 3px; }
+    .text a { color: var(--accent); }
+    /* Links without an address of their own (only our click opens them: Thunderbird opened email links a second time). */
+    a[data-href] { cursor: pointer; text-decoration: underline; color: var(--accent); }
+    li.entry.done .text { color: var(--muted); text-decoration: line-through; }
+    .meta { font-size: 12px; color: var(--muted); margin-top: 1px; }
+    /* A quick action's field at the task (due date, label). */
+    .ask { display: flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+    .ask input { font: inherit; color: var(--fg); background: transparent; width: 200px; padding: 1px 8px;
+                 border: 1px solid var(--accent); border-radius: 1em; outline: none; }
+    .ask .hint { margin-left: 4px; }
+    .ask { position: relative; }
+    /* Labels used before, as the field's list: wide enough to read, as chips. */
+    /* All labels used before; scrolls (also with the wheel) beyond about eight. */
+    /* Exactly under the field and as wide (set from it); a label too long is cut off with "…", its name as tooltip. */
+    .suggest { position: absolute; top: 100%; z-index: 5; box-sizing: border-box; max-height: 260px;
+               overflow-y: auto; overscroll-behavior: contain; margin: 4px 0 0; padding: 4px;
+               list-style: none; font-size: 13px;
+               background: var(--bg); border: 1px solid var(--chip-border); border-radius: 8px; box-shadow: 0 4px 16px #0003; }
+    .suggest[hidden] { display: none; }
+    .suggest li { display: block; padding: 3px 8px; border-radius: 5px; cursor: pointer; }
+    .suggest .tn-chip { display: inline-block; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;
+                        white-space: nowrap; vertical-align: middle; }
+    /* Hovered or chosen with the arrow keys: a grey block across the row. */
+    .suggest li:hover, .suggest li.selected { background: var(--hover-strong); }
+    /* The filter and the labels in one row: the filter first, so it stays where it is. */
+    #labelbar { display: flex; align-items: flex-start; gap: 6px; margin: 0 0 14px; }
+    #labelbar #labels { flex: 1; min-width: 0; margin: 0; }
+    #labelbar .search { flex: none; }
+    /* The setting "keep the filters at the top": the filter, labels and switches stay, the title
+       and the tasks scroll; a little room below them, then the shadow. */
+    body.sticky-top #top { position: sticky; top: 0; z-index: 4; background: var(--bg); padding: 10px 0 12px;
+                           box-shadow: 0 6px 6px -6px #0002; margin-bottom: 6px; }
+    body.sticky-top #top #controls { margin-bottom: 0; }
+    .meta a { color: inherit; text-decoration: none; cursor: pointer; }
+    .meta a:hover { text-decoration: underline; color: var(--accent); }
+    .meta .subject { font-weight: 600; }
+    /* What the filter matched: a faint marker. */
+    mark.hit { background: color-mix(in srgb, #ffd43b 45%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+    .tn-chip.hit { outline: 2px solid color-mix(in srgb, #ffd43b 80%, transparent); outline-offset: 0; }
+    /* The whole note, read-only, below an expanded task. */
+    li.entry .expand { flex: none; align-self: flex-start; font: inherit; font-size: 12px; width: 20px; height: 20px; padding: 0; margin-top: 1px;
+                       border: none; background: none; color: var(--muted); cursor: pointer; border-radius: 4px; opacity: 0.5; }
+    li.entry:hover .expand, li.entry.expanded .expand { opacity: 1; }
+    li.entry .expand:hover { background: var(--hover-strong); }
+    .note-preview { margin: 6px 0 2px; padding: 6px 10px; font-size: 13px; border-left: 3px solid var(--chip-border);
+                    background: var(--hover); border-radius: 0 6px 6px 0; overflow-wrap: anywhere; }
+    .note-preview > :first-child { margin-top: 0; } .note-preview > :last-child { margin-bottom: 0; }
+    .note-preview ul { padding-left: 1.3em; } .note-preview li.task { list-style: none; margin-left: -1.3em; }
+    /* Nested lists indented (the hung checkbox cancelled the list's own indent). */
+    .note-preview li > ul, .note-preview li > ol { padding-left: 2.6em; }
+    /* overflow: hidden puts the baseline of every box at its bottom edge, ticked (with its "✓") or not:
+       otherwise the tick's own line moved the ticked boxes down. */
+    .note-preview .task-box { display: inline-block; box-sizing: border-box; width: 0.95em; height: 0.95em; border: 1.5px solid currentColor;
+                              border-radius: 3px; overflow: hidden; vertical-align: -0.18em; margin-right: 0.5em; opacity: 0.7; }
+    .note-preview .tn-box-done { background: #2f9e44; border-color: #1e6e30; opacity: 1; }
+    .note-preview .tn-box-done::before { content: "✓"; display: block; color: #fff; font: bold 0.7em/1.1 system-ui, sans-serif; text-align: center; }
+    /* The sender's address after the name: lighter, there to tell people apart. */
+    .meta .address, h2 .address { opacity: 0.7; font-size: 0.95em; }
+    .quote { font-style: italic; }
+    /* Dates and labels, as in the cards (D38). */
+    .tn-chip { background: var(--chip); border: 1px solid var(--chip-border); border-radius: 0.8em; padding: 0 0.45em; }
+    .tn-date { white-space: nowrap; }
+    .tn-label { cursor: pointer; }
+    .tn-overdue { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); background: color-mix(in srgb, var(--red) 8%, transparent); font-weight: 600; }
+    body.no-overdue .tn-overdue { color: inherit; border-color: var(--chip-border); background: var(--chip); font-weight: inherit; }
+    .tn-loose-date { text-decoration: underline dotted; text-underline-offset: 0.2em; }
+    .tn-done-date { font-size: 0.85em; opacity: 0.75; white-space: nowrap; display: inline-block; text-decoration: none; }
+    .empty { color: var(--muted); margin: 40px 0; text-align: center; }
+    #notice { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #333; color: #fff;
+              padding: 6px 14px; border-radius: 6px; font-size: 13px; display: none; }
+    #notice .undo { font: inherit; font-weight: 600; color: #8ab4f8; background: none; border: none; cursor: pointer; padding: 0 0 0 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Tasks</h1>
+    </header>
+    <!-- Stays at the top while the tasks scroll (setting); the title scrolls away. -->
+    <div id="top">
+      <div id="labelbar">
+        <label class="search" id="search" title="Filter by words in the task, the email's subject or sender, or the highlighted passage; &quot;in quotes&quot; for a phrase with spaces, -word or -&quot;phrase&quot; to leave out, or for either, (brackets) to group, /regex/ for a pattern. #word finds a label, Enter picks it. @ for a date. Cmd/Ctrl+F to get here, Esc to clear.">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12l-4.6 5.4v4.8l-2.8 1.3V8.4z"/></svg>
+          <span id="dateTokens"></span>
+          <input id="filter" type="text" placeholder="Filter… (#label)" autocomplete="off" spellcheck="false">
+          <button id="clearFilter" type="button" title="Clear the filter" aria-label="Clear the filter" hidden>×</button>
+        </label>
+        <div id="labels"></div>
+      </div>
+      <div id="controls"></div>
+    </div>
+    <div id="groups"></div>
+  </main>
+  <div id="notice"></div>
+  <script src="dist/tasks.js"></script>
+</body>
+</html>

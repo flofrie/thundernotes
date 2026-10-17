@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this
+     - file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+  <!-- ThunderNotes tasks: the post-it with a ticked box. -->
+  <path d="M5 3.5h22a1.5 1.5 0 0 1 1.5 1.5v16.5l-7 7H5A1.5 1.5 0 0 1 3.5 27V5A1.5 1.5 0 0 1 5 3.5z" fill="#ffd43b" stroke="#c99a00" stroke-width="1"/>
+  <path d="M28.5 21.5h-5.5a1.5 1.5 0 0 0-1.5 1.5v5.5z" fill="#f0b400" stroke="#c99a00" stroke-width="1" stroke-linejoin="round"/>
+  <rect x="8.5" y="8.5" width="12" height="12" rx="2" fill="#fff" stroke="#5c4300" stroke-width="2"/>
+  <path d="M11 14.5l3 3 6.5-7.5" fill="none" stroke="#2b8a3e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

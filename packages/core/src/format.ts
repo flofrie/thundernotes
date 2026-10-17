@@ -1,0 +1,634 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+/**
+ * The ThunderNotes file format (D5, D25): one Markdown file per email.
+ * - YAML front matter: the email reference and, per annotation, its id, quote,
+ *   prefix/suffix, position and timestamps. Authoritative for anchoring.
+ * - Body: `# Subject`, then the note on the whole email, then one `## “quote”`
+ *   section per annotation that has a note, marked `<!-- tn:<id> -->`. Authoritative
+ *   for note text. Headings without the marker belong to the note above them.
+ * Used for export/import, the IMAP carrier attachment (D7) and the Git folder (D6).
+ */
+
+import { Document, isPair, isScalar, isSeq, parse, visit } from "yaml";
+import { EMAIL_NOTE_KEY, mergeText } from "./conflict.js";
+import type { Annotation, AnnotationSet, EmailRef, FoldState, TextPositionSelector, TextQuoteSelector, Tombstone } from "./index.js";
+
+export const FORMAT_VERSION = 1;
+
+interface FrontAnnotation {
+  id: string;
+  quote: string;
+  prefix?: string;
+  suffix?: string;
+  position?: [number, number];
+  colour?: string;
+  tags?: string[];
+  created: string;
+  updated: string;
+  text_updated?: string;
+  text_by?: string;
+  text_base?: string;
+  colour_updated?: string;
+}
+
+interface FrontMatter {
+  thundernotes: number;
+  message_id: string;
+  subject?: string;
+  from?: string;
+  date?: string;
+  folder_hint?: string;
+  created: string;
+  updated: string;
+  rev: number;
+  email_note_updated?: string;
+  email_note_colour?: string;
+  email_note_colour_updated?: string;
+  email_note_by?: string;
+  email_note_base?: string;
+  annotations?: FrontAnnotation[];
+  tombstones?: Array<{ id: string; deleted: string; note?: string } & Partial<FrontAnnotation>>;
+  deleted_email_note?: { note: string; deleted: string };
+  purged_before?: string;
+  folded?: Record<string, FoldState>;
+}
+
+const MARKER = /<!--\s*tn:([^\s>]+)\s*-->/;
+const QUOTE_IN_HEADING = 80;
+
+function quoteOf(a: Annotation): TextQuoteSelector | undefined {
+  return a.selectors.find((s): s is TextQuoteSelector => s.type === "TextQuoteSelector");
+}
+
+function positionOf(a: Annotation): TextPositionSelector | undefined {
+  return a.selectors.find((s): s is TextPositionSelector => s.type === "TextPositionSelector");
+}
+
+/** One line of the quote for a heading: no line breaks, shortened, no stray markers. */
+function headingQuote(quote: string): string {
+  const flat = quote.replace(/\s+/g, " ").replace(/<!--|-->/g, "").trim();
+  return flat.length > QUOTE_IN_HEADING ? `${flat.slice(0, QUOTE_IN_HEADING - 1)}…` : flat;
+}
+
+function toFront(a: Annotation): FrontAnnotation {
+  const quote = quoteOf(a);
+  const position = positionOf(a);
+  return {
+    id: a.id,
+    quote: quote?.exact ?? "",
+    ...(quote?.prefix && { prefix: quote.prefix }),
+    ...(quote?.suffix && { suffix: quote.suffix }),
+    ...(position && { position: [position.start, position.end] as [number, number] }),
+    ...(a.colour && { colour: a.colour }),
+    ...(a.tags?.length && { tags: a.tags }),
+    created: a.created,
+    updated: a.updated,
+    ...(a.textUpdated && a.textUpdated !== a.updated && { text_updated: a.textUpdated }),
+    ...(a.textBy && { text_by: a.textBy }),
+    ...(a.textBase && { text_base: a.textBase }),
+    ...(a.colourUpdated && a.colourUpdated !== a.updated && { colour_updated: a.colourUpdated }),
+  };
+}
+
+const str = (v: unknown) => (v === undefined || v === null ? undefined : String(v));
+const time = (v: unknown, fallback: string) => (v instanceof Date ? v.toISOString() : (str(v) ?? fallback));
+
+/** Front-matter fields + note text -> Annotation. */
+function fromFront(fa: FrontAnnotation, bodyMd: string, created: string): Annotation {
+  const selectors: Annotation["selectors"] = [
+    {
+      type: "TextQuoteSelector",
+      exact: String(fa.quote),
+      ...(fa.prefix !== undefined && { prefix: String(fa.prefix) }),
+      ...(fa.suffix !== undefined && { suffix: String(fa.suffix) }),
+    },
+  ];
+  if (Array.isArray(fa.position) && fa.position.length === 2) {
+    selectors.push({ type: "TextPositionSelector", start: Number(fa.position[0]), end: Number(fa.position[1]) });
+  }
+  const annotation: Annotation = {
+    id: String(fa.id),
+    selectors,
+    bodyMd,
+    created: time(fa.created, created),
+    updated: time(fa.updated, created),
+  };
+  if (fa.colour) annotation.colour = String(fa.colour);
+  if (fa.text_updated !== undefined) annotation.textUpdated = time(fa.text_updated, annotation.updated);
+  if (fa.text_by) annotation.textBy = String(fa.text_by);
+  if (fa.text_base) annotation.textBase = String(fa.text_base);
+  if (fa.colour_updated !== undefined) annotation.colourUpdated = time(fa.colour_updated, annotation.updated);
+  if (Array.isArray(fa.tags) && fa.tags.length) annotation.tags = fa.tags.map(String);
+  return annotation;
+}
+
+/** AnnotationSet -> Markdown file content. */
+export function toMarkdown(set: AnnotationSet): string {
+  const front: FrontMatter = {
+    thundernotes: FORMAT_VERSION,
+    message_id: set.email.messageId,
+    ...(set.email.subject !== undefined && { subject: set.email.subject }),
+    ...(set.email.from !== undefined && { from: set.email.from }),
+    ...(set.email.date !== undefined && { date: set.email.date }),
+    ...(set.email.folderHint !== undefined && { folder_hint: set.email.folderHint }),
+    created: set.created,
+    updated: set.updated,
+    rev: set.rev,
+    ...(set.emailNoteUpdated !== undefined && { email_note_updated: set.emailNoteUpdated }),
+    ...(set.emailNoteColour && { email_note_colour: set.emailNoteColour }),
+    ...(set.emailNoteColourUpdated && { email_note_colour_updated: set.emailNoteColourUpdated }),
+    ...(set.emailNoteBy && { email_note_by: set.emailNoteBy }),
+    ...(set.emailNoteBase && { email_note_base: set.emailNoteBase }),
+    annotations: set.annotations.map(toFront),
+  };
+  if (!front.annotations!.length) delete front.annotations;
+  // A tombstone keeps a copy of what was deleted (D33): its fields plus the note text.
+  if (set.tombstones?.length) {
+    front.tombstones = set.tombstones.map((t) => ({
+      id: t.id,
+      deleted: t.deleted,
+      ...(t.annotation && { ...toFront(t.annotation), id: t.id, ...(t.annotation.bodyMd && { note: t.annotation.bodyMd }) }),
+    }));
+  }
+  if (set.deletedEmailNote) front.deleted_email_note = { note: set.deletedEmailNote.md, deleted: set.deletedEmailNote.deleted };
+  if (set.purgedBefore) front.purged_before = set.purgedBefore;
+  if (set.folded && Object.keys(set.folded).length) {
+    front.folded = Object.fromEntries(Object.entries(set.folded).map(([id, f]) => [id, { folded: f.folded, at: f.at }]));
+  }
+
+  const doc = new Document(front);
+  // `position: [1043, 1073]` on one line.
+  visit(doc, {
+    Pair(_, pair) {
+      if (isPair(pair) && isScalar(pair.key) && pair.key.value === "position" && isSeq(pair.value)) pair.value.flow = true;
+    },
+  });
+  const yaml = doc.toString({ lineWidth: 0 }).trimEnd();
+  const parts = [`---\n${yaml}\n---`, `# ${set.email.subject?.trim() || "(no subject)"}`];
+  if (set.emailNoteMd?.trim()) parts.push(set.emailNoteMd.trim());
+  for (const a of set.annotations) {
+    if (!a.bodyMd.trim()) continue;
+    parts.push(`## “${headingQuote(quoteOf(a)?.exact ?? "")}” <!-- tn:${a.id} -->\n\n${a.bodyMd.trim()}`);
+  }
+  return `${parts.join("\n\n")}\n`;
+}
+
+export class FormatError extends Error {}
+
+/** Markdown file content -> AnnotationSet. Throws FormatError for files that aren't ours. */
+export function fromMarkdown(text: string): AnnotationSet {
+  const source = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const fm = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(source);
+  if (!fm) throw new FormatError("no front matter");
+  let front: FrontMatter;
+  try {
+    front = parse(fm[1]!) as FrontMatter;
+  } catch (e) {
+    throw new FormatError(`front matter is not valid YAML: ${(e as Error).message}`);
+  }
+  if (!front || typeof front !== "object" || front.thundernotes === undefined) throw new FormatError("not a ThunderNotes file");
+  if (Number(front.thundernotes) > FORMAT_VERSION) throw new FormatError(`format version ${front.thundernotes} is newer than this add-on`);
+  if (!front.message_id) throw new FormatError("message_id missing");
+
+  // Body: title line, email note, then marked sections.
+  const notes = new Map<string, string[]>();
+  const emailNote: string[] = [];
+  let current = emailNote;
+  let titleSeen = false;
+  for (const line of source.slice(fm[0].length).split("\n")) {
+    const marker = /^##\s/.test(line) ? MARKER.exec(line) : null;
+    if (marker) {
+      current = [];
+      notes.set(marker[1]!, current);
+    } else if (!titleSeen && /^#\s/.test(line) && current === emailNote && !emailNote.some((l) => l.trim())) {
+      titleSeen = true; // the generated "# Subject" line
+    } else {
+      current.push(line);
+    }
+  }
+  const joined = (lines: string[]) => lines.join("\n").trim();
+
+  const now = new Date().toISOString();
+  const created = time(front.created, now);
+  const email: EmailRef = { messageId: String(front.message_id) };
+  if (front.subject !== undefined) email.subject = String(front.subject);
+  if (front.from !== undefined) email.from = String(front.from);
+  if (front.date !== undefined) email.date = time(front.date, "");
+  if (front.folder_hint !== undefined) email.folderHint = String(front.folder_hint);
+
+  const annotations: Annotation[] = (front.annotations ?? []).map((fa, i) => {
+    if (!fa || fa.id === undefined || fa.quote === undefined) throw new FormatError(`annotation ${i + 1}: id or quote missing`);
+    return fromFront(fa, joined(notes.get(String(fa.id)) ?? []), created);
+  });
+
+  const set: AnnotationSet = {
+    version: 1,
+    email,
+    rev: Number(front.rev) || 0,
+    created,
+    updated: time(front.updated, created),
+    annotations,
+  };
+  const emailNoteMd = joined(emailNote);
+  if (emailNoteMd) set.emailNoteMd = emailNoteMd;
+  if (front.email_note_updated !== undefined) set.emailNoteUpdated = time(front.email_note_updated, created);
+  if (front.email_note_colour) set.emailNoteColour = String(front.email_note_colour);
+  if (front.email_note_colour_updated !== undefined) set.emailNoteColourUpdated = time(front.email_note_colour_updated, created);
+  if (front.email_note_by) set.emailNoteBy = String(front.email_note_by);
+  if (front.email_note_base) set.emailNoteBase = String(front.email_note_base);
+  if (Array.isArray(front.tombstones) && front.tombstones.length) {
+    set.tombstones = front.tombstones
+      .filter((t) => t && t.id !== undefined)
+      .map((t) => {
+        const tomb: Tombstone = { id: String(t.id), deleted: time(t.deleted, created) };
+        if (t.quote !== undefined) tomb.annotation = fromFront(t as FrontAnnotation, t.note === undefined ? "" : String(t.note), created);
+        return tomb;
+      });
+  }
+  const den = front.deleted_email_note;
+  if (den && typeof den === "object" && den.note !== undefined) {
+    set.deletedEmailNote = { md: String(den.note), deleted: time(den.deleted, created) };
+  }
+  if (front.purged_before !== undefined) set.purgedBefore = time(front.purged_before, created);
+  if (front.folded && typeof front.folded === "object") {
+    const folded = Object.entries(front.folded)
+      .filter(([, f]) => f && typeof f === "object")
+      .map(([id, f]) => [String(id), { folded: f.folded === true, at: time(f.at, created) }] as const);
+    if (folded.length) set.folded = Object.fromEntries(folded);
+  }
+  return set;
+}
+
+// ---- file names (D5) -------------------------------------------------------------------
+
+/** FNV-1a, 32 bit, as 8 hex characters: short, stable, no crypto needed. */
+export function hash8(text: string): string {
+  let h = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(text)) {
+    h ^= byte;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+const TRANSLITERATE: Record<string, string> = { ä: "ae", ö: "oe", ü: "ue", ß: "ss", æ: "ae", ø: "oe", å: "aa" };
+
+export function slug(text: string, max = 50): string {
+  const ascii = text
+    .toLowerCase()
+    .replace(/[äöüßæøå]/g, (c) => TRANSLITERATE[c]!)
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/^(?:re|aw|fwd?|wg)\s*:\s*/g, "");
+  const s = ascii.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return (s.slice(0, max).replace(/-+$/, "") || "no-subject");
+}
+
+/** `YYYY/MM/YYYY-MM-DD_subject-slug_<hash8>.md`, dated by the email (else the set). */
+export function fileName(set: AnnotationSet): string {
+  const date = new Date(set.email.date || set.created);
+  const valid = !Number.isNaN(date.getTime()) ? date : new Date(set.created);
+  const y = String(valid.getUTCFullYear());
+  const m = String(valid.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(valid.getUTCDate()).padStart(2, "0");
+  return `${y}/${m}/${y}-${m}-${d}_${slug(set.email.subject ?? "")}_${hash8(set.email.messageId)}.md`;
+}
+
+// ---- merge ------------------------------------------------------------------------------
+
+export interface MergeResult {
+  set: AnnotationSet;
+  /** Annotations taken from `incoming` (new or newer). */
+  added: number;
+  updated: number;
+  /** Notes whose text now holds a conflict box (D32). */
+  conflicts: number;
+}
+
+/** Content that matters, ignoring timestamps and merge bookkeeping. */
+function sameContent(a: Annotation, b: Annotation): boolean {
+  return (
+    a.bodyMd === b.bodyMd &&
+    a.colour === b.colour &&
+    JSON.stringify(a.selectors) === JSON.stringify(b.selectors) &&
+    JSON.stringify(a.tags ?? []) === JSON.stringify(b.tags ?? [])
+  );
+}
+
+/** Tombstones without the copies purged (deleted up to `purgedBefore`). */
+function withoutPurged(tombstones: Tombstone[], purgedBefore: string | undefined): Tombstone[] {
+  if (!purgedBefore) return tombstones;
+  return tombstones.map((t) => (t.annotation && t.deleted <= purgedBefore ? { id: t.id, deleted: t.deleted } : t));
+}
+
+/** Union of tombstones by id, keeping the latest deletion time (and a copy if either has one). */
+function mergeTombstones(a: Tombstone[] = [], b: Tombstone[] = []): Tombstone[] {
+  const byId = new Map<string, Tombstone>();
+  for (const t of [...a, ...b]) {
+    const known = byId.get(t.id);
+    if (!known) byId.set(t.id, t);
+    else {
+      const later = t.deleted > known.deleted ? t : known;
+      const copy = later.annotation ?? (t.deleted > known.deleted ? known : t).annotation;
+      byId.set(t.id, copy ? { ...later, annotation: copy } : later);
+    }
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Card folding (D30): the newer choice per id wins; entries of deleted annotations go.
+ * Undefined when nothing is left.
+ */
+function mergeFolded(
+  a: Record<string, FoldState> = {},
+  b: Record<string, FoldState> = {},
+  deleted: Map<string, string>
+): Record<string, FoldState> | undefined {
+  const out: Record<string, FoldState> = {};
+  for (const [id, f] of [...Object.entries(a), ...Object.entries(b)]) {
+    if (deleted.has(id)) continue;
+    const known = out[id];
+    if (!known || f.at > known.at) out[id] = f;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+const HISTORY = 10;
+
+/** Adds texts to a note's sync history (newest last, no repeats, at most HISTORY). */
+function remember(history: Record<string, string[]>, key: string, text: string): void {
+  const list = (history[key] ?? []).filter((t) => t !== text);
+  list.push(text);
+  history[key] = list.slice(-HISTORY);
+}
+
+/** "sync": between devices (conflict box when no base is known); "import": files (newer wins). */
+export type MergeMode = "sync" | "import";
+
+interface NoteText {
+  text: string;
+  at: string;
+  by?: string;
+}
+
+/**
+ * A note's text from two versions (D32): a three-way merge against the base the incoming
+ * version names, looked up in this device's sync history. Without a known base: equal
+ * times with different text mean a file edited by hand (editors don't touch the
+ * timestamps), which wins and is stamped `now`; an incoming text we already synced is stale. With no base found: in sync,
+ * lines both have are kept and the rest becomes a conflict box (nothing is lost); on import
+ * (a backup or an edited file) the newer text wins, as before (D25).
+ */
+function mergeNoteText(
+  history: string[],
+  mine: NoteText,
+  theirs: NoteText & { base?: string },
+  now: string,
+  mode: MergeMode
+): NoteText & { conflict: boolean } {
+  const newer = theirs.at > mine.at ? theirs : mine;
+  if (mine.text === theirs.text) return { ...newer, text: mine.text, conflict: false };
+  let base: string | undefined;
+  if (theirs.base !== undefined) {
+    base = hash8(mine.text) === theirs.base ? mine.text : history.find((t) => hash8(t) === theirs.base);
+  }
+  if (base === undefined && mine.at === theirs.at) return { text: theirs.text, at: now, by: theirs.by, conflict: false };
+  if (base === undefined && history.includes(theirs.text)) return { ...mine, conflict: false };
+  if (base === undefined && mode === "import") return { ...newer, conflict: false };
+  const merged = mergeText(base, mine, theirs);
+  if (merged.text === mine.text) return { ...mine, conflict: false };
+  if (merged.text === theirs.text) return { ...theirs, conflict: false };
+  return { text: merged.text, at: newer.at, by: newer.by, conflict: merged.conflict };
+}
+
+/** Max of ISO timestamps. */
+const latest = (...times: (string | undefined)[]) => times.filter((t): t is string => !!t).reduce((m, t) => (t > m ? t : m), "");
+
+/** One annotation present on both sides: each part decided on its own (D32). */
+function mergeAnnotation(
+  mine: Annotation,
+  theirs: Annotation,
+  history: string[],
+  now: string,
+  mode: MergeMode
+): { a: Annotation; conflict: boolean } {
+  const text = mergeNoteText(
+    history,
+    { text: mine.bodyMd, at: mine.textUpdated ?? mine.updated, by: mine.textBy },
+    { text: theirs.bodyMd, at: theirs.textUpdated ?? theirs.updated, by: theirs.textBy, base: theirs.textBase },
+    now,
+    mode
+  );
+  const mineColourAt = mine.colourUpdated ?? mine.updated;
+  const theirColourAt = theirs.colourUpdated ?? theirs.updated;
+  // Equal times, different colour: edited by hand, the incoming file wins.
+  const takeColour = theirColourAt > mineColourAt || (theirColourAt === mineColourAt && theirs.colour !== mine.colour);
+  const colourAt = takeColour && theirColourAt === mineColourAt ? now : latest(mineColourAt, theirColourAt);
+  const a: Annotation = {
+    ...mine,
+    bodyMd: text.text,
+    textUpdated: text.at,
+    selectors: theirs.updated > mine.updated ? theirs.selectors : mine.selectors,
+    tags: theirs.updated > mine.updated ? theirs.tags : mine.tags,
+    colourUpdated: colourAt,
+    created: theirs.created < mine.created ? theirs.created : mine.created,
+  };
+  if (!a.tags) delete a.tags;
+  const colour = takeColour ? theirs.colour : mine.colour;
+  if (colour) a.colour = colour;
+  else delete a.colour;
+  if (text.by) a.textBy = text.by;
+  else delete a.textBy;
+  delete a.textBase;
+  a.updated = latest(mine.updated, theirs.updated, a.textUpdated, a.colourUpdated);
+  return { a, conflict: text.conflict };
+}
+
+/**
+ * Merges two versions of the same email's set (import, IMAP sync): union of annotations by
+ * id; per annotation, text, colour and tags are decided separately (D32): text by a
+ * three-way merge (mergeNoteText), colour by its own timestamp. Tombstones delete
+ * annotations not updated after the deletion. The whole-email note follows the same rules
+ * as an annotation's text and colour. `local.syncHistory` gains the incoming texts.
+ */
+export function mergeSets(
+  local: AnnotationSet,
+  incoming: AnnotationSet,
+  now = new Date().toISOString(),
+  mode: MergeMode = "import"
+): MergeResult {
+  const byId = new Map(local.annotations.map((a) => [a.id, a]));
+  const history: Record<string, string[]> = structuredClone(local.syncHistory ?? {});
+  let added = 0;
+  let updated = 0;
+  let conflicts = 0;
+  // Purged copies stay gone whichever side still has them (the later purge counts).
+  const purgedBefore = [local.purgedBefore, incoming.purgedBefore].filter((p): p is string => !!p).sort().at(-1);
+  const tombstones = withoutPurged(mergeTombstones(local.tombstones, incoming.tombstones), purgedBefore);
+  const deletedAt = new Map(tombstones.map((t) => [t.id, t.deleted]));
+
+  for (const a of incoming.annotations) {
+    const mine = byId.get(a.id);
+    const deleted = deletedAt.get(a.id);
+    if (deleted !== undefined && a.updated <= deleted) continue;
+    if (!mine) {
+      const fresh = { ...a };
+      delete fresh.textBase;
+      byId.set(a.id, fresh);
+      added++;
+    } else {
+      const merged = mergeAnnotation(mine, a, history[a.id] ?? [], now, mode);
+      if (merged.conflict) conflicts++;
+      if (!sameContent(merged.a, mine)) updated++;
+      byId.set(a.id, merged.a);
+    }
+    remember(history, a.id, a.bodyMd);
+  }
+  let removed = 0;
+  for (const [id, a] of byId) {
+    const deleted = deletedAt.get(id);
+    if (deleted !== undefined && a.updated <= deleted) {
+      byId.delete(id);
+      delete history[id];
+      removed++;
+    }
+  }
+
+  // Whole-email note. Writers always set emailNoteUpdated now. If only one side has it, the
+  // other hasn't changed its note since: count it as old. If neither has it (older data), use `updated`.
+  const oneSided = !local.emailNoteUpdated !== !incoming.emailNoteUpdated;
+  const localNoteAt = local.emailNoteUpdated ?? (oneSided ? local.created : local.updated);
+  const incomingNoteAt = incoming.emailNoteUpdated ?? (oneSided ? incoming.created : incoming.updated);
+  const note = mergeNoteText(
+    history[EMAIL_NOTE_KEY] ?? [],
+    { text: local.emailNoteMd ?? "", at: localNoteAt, by: local.emailNoteBy },
+    { text: incoming.emailNoteMd ?? "", at: incomingNoteAt, by: incoming.emailNoteBy, base: incoming.emailNoteBase },
+    now,
+    mode
+  );
+  if (note.conflict) conflicts++;
+  const noteChanged = note.text !== (local.emailNoteMd ?? "");
+  if (noteChanged) updated++;
+  if (incoming.emailNoteMd !== undefined || incoming.emailNoteUpdated) remember(history, EMAIL_NOTE_KEY, incoming.emailNoteMd ?? "");
+  const localColourAt = local.emailNoteColourUpdated ?? localNoteAt;
+  const incomingColourAt = incoming.emailNoteColourUpdated ?? incomingNoteAt;
+  const takeColour =
+    (incoming.emailNoteColour ?? "") !== (local.emailNoteColour ?? "") && incomingColourAt >= localColourAt;
+  if (takeColour) updated++;
+
+  const newTombstones = tombstones.length !== (local.tombstones?.length ?? 0) || removed > 0;
+  const folded = mergeFolded(local.folded, incoming.folded, deletedAt);
+  const foldChanged = JSON.stringify(folded ?? {}) !== JSON.stringify(local.folded ?? {});
+  const purgeChanged = (purgedBefore ?? "") !== (local.purgedBefore ?? "");
+  const changed = added + updated + removed > 0 || newTombstones || foldChanged || purgeChanged;
+
+  const set: AnnotationSet = {
+    ...local,
+    email: { ...incoming.email, ...local.email },
+    annotations: [...byId.values()],
+    rev: Math.max(local.rev, incoming.rev) + (changed ? 1 : 0),
+    updated: changed ? now : local.updated,
+    created: incoming.created < local.created ? incoming.created : local.created,
+    syncHistory: history,
+  };
+  if (note.text) set.emailNoteMd = note.text;
+  else delete set.emailNoteMd;
+  if (noteChanged || note.at !== localNoteAt) set.emailNoteUpdated = note.at;
+  else if (local.emailNoteUpdated) set.emailNoteUpdated = local.emailNoteUpdated;
+  if (note.by) set.emailNoteBy = note.by;
+  else delete set.emailNoteBy;
+  delete set.emailNoteBase;
+  const emailNoteColour = takeColour ? incoming.emailNoteColour : local.emailNoteColour;
+  if (emailNoteColour) set.emailNoteColour = emailNoteColour;
+  else delete set.emailNoteColour;
+  const colourAt = takeColour ? incoming.emailNoteColourUpdated : local.emailNoteColourUpdated;
+  if (colourAt) set.emailNoteColourUpdated = colourAt;
+  else delete set.emailNoteColourUpdated;
+  if (tombstones.length) set.tombstones = tombstones;
+  else delete set.tombstones;
+  const den = [local.deletedEmailNote, incoming.deletedEmailNote].filter((d) => !!d).sort((x, y) => (x!.deleted < y!.deleted ? 1 : -1))[0];
+  if (den && !(purgedBefore && den.deleted <= purgedBefore)) set.deletedEmailNote = den;
+  else delete set.deletedEmailNote;
+  if (purgedBefore) set.purgedBefore = purgedBefore;
+  else delete set.purgedBefore;
+  if (folded) set.folded = folded;
+  else delete set.folded;
+  return { set, added, updated: updated + removed, conflicts };
+}
+
+/**
+ * Before a set is written to a carrier: each note names the synced text it was edited from
+ * (`textBase`, the newest in this device's sync history), so the receiver can merge
+ * three-way (D32). Returns a copy; the history itself is updated after the upload
+ * (`rememberSynced`).
+ */
+export function withBases(set: AnnotationSet): AnnotationSet {
+  const history = set.syncHistory ?? {};
+  const base = (key: string) => {
+    const list = history[key];
+    return list?.length ? hash8(list[list.length - 1]!) : undefined;
+  };
+  const out: AnnotationSet = {
+    ...set,
+    annotations: set.annotations.map((a) => {
+      const b = base(a.id);
+      const copy = { ...a };
+      if (b) copy.textBase = b;
+      else delete copy.textBase;
+      return copy;
+    }),
+  };
+  const emailBase = base(EMAIL_NOTE_KEY);
+  if (emailBase) out.emailNoteBase = emailBase;
+  else delete out.emailNoteBase;
+  delete out.syncHistory;
+  return out;
+}
+
+/** After an upload: the uploaded texts are now synced, so they become possible bases. */
+export function rememberSynced(set: AnnotationSet, uploaded: AnnotationSet): AnnotationSet {
+  const history: Record<string, string[]> = structuredClone(set.syncHistory ?? {});
+  for (const a of uploaded.annotations) remember(history, a.id, a.bodyMd);
+  remember(history, EMAIL_NOTE_KEY, uploaded.emailNoteMd ?? "");
+  const ids = new Set([...set.annotations.map((a) => a.id), EMAIL_NOTE_KEY]);
+  for (const key of Object.keys(history)) if (!ids.has(key)) delete history[key];
+  return { ...set, syncHistory: history };
+}
+
+/** Tombstones are kept this long, then dropped (D7). */
+export const TOMBSTONE_DAYS = 30;
+
+/** Drops tombstones older than TOMBSTONE_DAYS. Returns the same object if nothing changed. */
+export function gcTombstones(set: AnnotationSet, now = new Date().toISOString()): AnnotationSet {
+  const cutoff = new Date(Date.parse(now) - TOMBSTONE_DAYS * 86_400_000).toISOString();
+  const oldNote = !!set.deletedEmailNote && set.deletedEmailNote.deleted <= cutoff;
+  if (!set.tombstones?.length && !oldNote) return set;
+  const kept = (set.tombstones ?? []).filter((t) => t.deleted > cutoff);
+  if (kept.length === (set.tombstones?.length ?? 0) && !oldNote) return set;
+  const next: AnnotationSet = { ...set, tombstones: kept };
+  if (!kept.length) delete next.tombstones;
+  if (oldNote) delete next.deletedEmailNote;
+  return next;
+}
+
+/** Removes an annotation and leaves a tombstone, so the deletion syncs. */
+export function deleteAnnotation(set: AnnotationSet, id: string, now = new Date().toISOString()): AnnotationSet {
+  const { [id]: _gone, ...folded } = set.folded ?? {};
+  const gone = set.annotations.find((a) => a.id === id);
+  const copy = gone && { ...gone };
+  if (copy) delete copy.textBase;
+  const next: AnnotationSet = {
+    ...set,
+    annotations: set.annotations.filter((a) => a.id !== id),
+    tombstones: mergeTombstones(set.tombstones, [{ id, deleted: now, ...(copy && { annotation: copy }) }]),
+    rev: set.rev + 1,
+    updated: now,
+  };
+  if (Object.keys(folded).length) next.folded = folded;
+  else delete next.folded;
+  return next;
+}

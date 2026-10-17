@@ -1,0 +1,92 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+/* Injected into displayed messages with the message display script.
+ *
+ * Highlights must never change the flow of the email text:
+ * - vertical padding on inline elements doesn't change line height;
+ * - horizontal padding sits only on the outer ends (-start / -end) and is cancelled
+ *   by an equal negative margin;
+ * - the colour is translucent, so where the wider area overlaps a neighbouring
+ *   letter it stays readable.
+ * A highlight can be several <mark> pieces (one per text node); inner piece
+ * boundaries get no padding, no rounding and no frame edge. */
+
+/* Colours (D29): each mark carries its colour as variables set by the display script
+ * (--tn-c-bg, --tn-c-active, --tn-c-partial, --tn-c-frame, --tn-c-fg); the rules below choose
+ * which one applies. Defaults are yellow. */
+
+mark.thundernotes-hl {
+  background: var(--tn-c-bg, rgba(255, 240, 74, 0.6));
+  color: inherit;
+  padding: 1px 0;
+  border-radius: 0;
+  cursor: pointer;
+}
+/* Setting "Adjust text colour in highlights for contrast" (on by default). */
+.thundernotes-contrast mark.thundernotes-hl {
+  color: var(--tn-c-fg, inherit);
+}
+mark.thundernotes-hl-start {
+  padding-left: 2px;
+  margin-left: -2px;
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+}
+mark.thundernotes-hl-end {
+  padding-right: 2px;
+  margin-right: -2px;
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+/* Partly found in this view. */
+mark.thundernotes-hl-partial {
+  background: var(--tn-c-partial, rgba(255, 240, 74, 0.3));
+  text-decoration: underline dashed var(--tn-c-frame, #b08900);
+}
+
+/* Highlight with a note: 1.5px frame as inset shadows (no space taken). */
+mark.thundernotes-hl-note {
+  box-shadow: inset 0 1.5px 0 var(--tn-c-frame, #a07c00), inset 0 -1.5px 0 var(--tn-c-frame, #a07c00);
+}
+mark.thundernotes-hl-note.thundernotes-hl-start {
+  box-shadow: inset 0 1.5px 0 var(--tn-c-frame, #a07c00), inset 0 -1.5px 0 var(--tn-c-frame, #a07c00),
+    inset 1.5px 0 0 var(--tn-c-frame, #a07c00);
+}
+mark.thundernotes-hl-note.thundernotes-hl-end {
+  box-shadow: inset 0 1.5px 0 var(--tn-c-frame, #a07c00), inset 0 -1.5px 0 var(--tn-c-frame, #a07c00),
+    inset -1.5px 0 0 var(--tn-c-frame, #a07c00);
+}
+mark.thundernotes-hl-note.thundernotes-hl-start.thundernotes-hl-end {
+  box-shadow: inset 0 0 0 1.5px var(--tn-c-frame, #a07c00);
+}
+
+/* The highlight whose card is hovered or active. */
+mark.thundernotes-hl-active {
+  background: var(--tn-c-active, rgba(255, 240, 74, 0.9));
+}
+
+/* Debug mode (message display action menu: "Show match types (debug)"):
+ * one colour per match type, see packages/thunderbird/README.md. */
+.thundernotes-debug mark.thundernotes-hl[data-method="position"] { background: rgba(255, 212, 0, 0.55); }
+.thundernotes-debug mark.thundernotes-hl[data-method="quote"] { background: rgba(64, 192, 87, 0.45); }
+.thundernotes-debug mark.thundernotes-hl[data-method="context"] { background: rgba(51, 154, 240, 0.45); }
+.thundernotes-debug mark.thundernotes-hl[data-method="loose"] { background: rgba(253, 126, 20, 0.5); }
+.thundernotes-debug mark.thundernotes-hl[data-method="fuzzy"] { background: rgba(204, 93, 232, 0.45); }
+.thundernotes-debug mark.thundernotes-hl[data-method="partial"] { background: rgba(250, 82, 82, 0.45); }
+
+/* Printing (normally) leaves ThunderNotes out: no notes column, no highlights, the email at its
+   full width, as without the add-on. "Print with Notes" (Thunderbird's File and
+   right-click menus) sets .thundernotes-print-notes for one print. */
+@media print {
+  html:not(.thundernotes-print-notes) .thundernotes-host { display: none !important; }
+  /* The email's header shows only in print and moves the email down: the notes move with it. */
+  html.thundernotes-print-notes .thundernotes-host { top: var(--thundernotes-print-shift, 0px) !important; }
+  html:not(.thundernotes-print-notes) { padding-right: 0 !important; }
+  html:not(.thundernotes-print-notes) mark.thundernotes-hl {
+    background: none !important; color: inherit !important; padding: 0 !important; margin: 0 !important;
+    border: none !important; box-shadow: none !important; outline: none !important;
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+*.xpi
+*.zip
+.env
+.env.*
+.DS_Store
+*.log
+coverage/
+*.tsbuildinfo
+.vscode/
+.idea/
