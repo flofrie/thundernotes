@@ -41,6 +41,8 @@ export type ToBackground =
   | { type: "copyMarkdown"; what: "task"; id: string; md: string; line: number }
   | { type: "copyMarkdown"; what: "note"; id: string; md: string }
   | { type: "copyMarkdown"; what: "all"; order: string[] }
+  /** The note's text with its k-th "@" date shaped `text` (outside code) written as an ISO date; null if gone. */
+  | { type: "convertLooseDate"; md: string; text: string; k: number }
   | { type: "setPref"; key: "marginCollapsed"; value: boolean }
   | { type: "setPref"; key: "marginWidth"; value: number | null }
   | { type: "setPref"; key: "lastColour"; value: string }
@@ -49,7 +51,7 @@ export type ToBackground =
   /** A note opened from the task view: the keyboard focus into the message, so editing starts (D38). */
   | { type: "focusPane" }
   /** A label's colour (null: no colour), for all devices (D40). */
-  | { type: "setLabelColour"; label: string; colour: string | null };
+  | { type: "setLabelColour"; label: string; colour: string | null; accountIds?: string[] };
 
 export interface Responses {
   load: {
@@ -62,6 +64,8 @@ export interface Responses {
     folded: string[];
     /** The email's Message-ID (key of its drafts, D34). */
     ref: string;
+    /** The account the email is in (D42): its label colours apply. */
+    accountId?: string;
     /** Opened from the task view (D38): the note to edit, the cursor at the end of the task's line. */
     focus?: { id: string; line: number };
   };
@@ -82,6 +86,7 @@ export interface Responses {
   readClipboard: string;
   writeClipboard: void;
   copyMarkdown: boolean;
+  convertLooseDate: string | null;
   setPref: void;
   focusPane: void;
   setLabelColour: void;
@@ -129,6 +134,8 @@ export interface EmailCandidate {
 
 /** An email whose notes link to the displayed one (D37). */
 export interface Backlink {
+  /** The account of the linking notes (D42): its copy is the one opened. */
+  accountId?: string;
   messageId: string;
   subject: string;
   from: string;

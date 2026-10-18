@@ -64,6 +64,8 @@ declare namespace tb {
     name: string;
     type: string;
     rootFolder?: MailFolder;
+    /** The default identity first. */
+    identities?: { email?: string; name?: string }[];
   }
 
   interface MessageTag {
@@ -89,6 +91,7 @@ declare namespace tb {
     openOptionsPage(): Promise<void>;
     getBrowserInfo(): Promise<{ name: string; version: string }>;
     getURL(path: string): string;
+    getManifest(): { version: string };
     onMessage: Event<(message: any, sender: MessageSender) => Promise<unknown> | undefined | void>;
     onInstalled: Event<(details: { reason: string }) => void>;
   }
@@ -123,6 +126,8 @@ declare namespace tb {
       continueList(messageListId: string): Promise<MessageList>;
       query(queryInfo: {
         headerMessageId?: string;
+        /** TB 121+: limits the search to the account(s). */
+        accountId?: string | string[];
         subject?: string;
         author?: string;
         messagesPerPage?: number;
@@ -135,6 +140,11 @@ declare namespace tb {
       import(file: File, folderId: string, properties?: { read?: boolean; new?: boolean }): Promise<MessageHeader>;
       delete(messageIds: number[], options?: { deletePermanently?: boolean } | boolean): Promise<void>;
       onNewMailReceived: Event<(folder: MailFolder, messages: MessageList) => void>;
+      /** The moved messages, in the same order as the originals (D42: notes follow). */
+      onMoved: Event<(originalMessages: MessageList, movedMessages: MessageList) => void>;
+      onCopied: Event<(originalMessages: MessageList, copiedMessages: MessageList) => void>;
+      /** Deleted for good (a move to the Trash is a move). */
+      onDeleted: Event<(messages: MessageList) => void>;
       tags: {
         list(): Promise<MessageTag[]>;
         create(key: string, tag: string, color: string): Promise<string>;

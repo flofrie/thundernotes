@@ -23,9 +23,10 @@ export async function ensureTag(): Promise<void> {
  * notes are shared by all copies, e.g. the Sent and the Inbox copy of a mail to yourself.
  * Messages in `skipFolder` (the carrier folder) are left alone.
  */
-export async function tagCopies(messageId: string, on: boolean, skipFolder?: string): Promise<void> {
+export async function tagCopies(messageId: string, on: boolean, skipFolder?: string, accountId?: string): Promise<void> {
   if (on) await ensureTag();
-  let page = await messenger.messages.query({ headerMessageId: messageId.replace(/^<|>$/g, "") });
+  // The copies in the notes' account only (D42): the same email elsewhere has notes of its own.
+  let page = await messenger.messages.query({ headerMessageId: messageId.replace(/^<|>$/g, ""), ...(accountId ? { accountId } : {}) });
   let changed = false;
   for (;;) {
     for (const m of page.messages) {
@@ -53,6 +54,7 @@ export interface RetagResult {
  * Sets or removes the tag on every message in the given folders, from what ThunderNotes
  * has stored: tagged = the email has highlights, notes or a whole-email note.
  */
+/** `annotatedIds`: "<account id>|<Message-ID>" of every email with notes (D42: per account; "*": not assigned yet). */
 export async function retagFolders(folders: tb.MailFolder[], annotatedIds: Set<string>): Promise<RetagResult> {
   const result: RetagResult = { folders: folders.length, checked: 0, tagged: 0, untagged: 0 };
   let tagReady = false;
@@ -61,7 +63,7 @@ export async function retagFolders(folders: tb.MailFolder[], annotatedIds: Set<s
     for (;;) {
       for (const m of page.messages) {
         result.checked++;
-        const should = annotatedIds.has(m.headerMessageId);
+        const should = annotatedIds.has(`${folder.accountId ?? ""}|${m.headerMessageId}`) || annotatedIds.has(`*|${m.headerMessageId}`);
         const has = m.tags.includes(TAG_KEY);
         if (should === has) continue;
         if (should && !tagReady) {

@@ -293,7 +293,7 @@ Switching to another app (or to Thunderbird's own panes) is not leaving the card
 Refines D5. One `.md` file per email.
 
 ### Front matter
-The front matter holds the email reference (`message_id`, subject, from, date, folder hint), `created`/`updated`/`rev`, a format version (`thundernotes: 1`) and, per annotation, `id`, `quote`, `prefix`, `suffix`, `position: [start, end]`, timestamps (later colour, tags; since D30 an optional `folded` map; `email_note_colour` for the whole-email note; since D32 `text_updated`, `colour_updated`, `text_by`, `text_base` and their `email_note_*` counterparts; since D33 tombstones with a copy of the deleted annotation and `deleted_email_note`).
+The front matter holds the email reference (`message_id`, subject, from, date, folder hint), `created`/`updated`/`rev`, a format version (`thundernotes: 2`) and, per annotation, `id`, `quote`, `prefix`, `suffix`, `position: [start, end]`, timestamps (later colour, tags; since D30 an optional `folded` map; `email_note_colour` for the whole-email note; since D32 `text_updated`, `colour_updated`, `text_by`, `text_base` and their `email_note_*` counterparts; since D33 tombstones with a copy of the deleted annotation and `deleted_email_note`).
 
 ### Body
 The body is for people: `# Subject`, the note on the whole email, then one `## “quote” <!-- tn:<id> -->` section per annotation that has a note; plain highlights live only in the front matter.
@@ -332,6 +332,16 @@ Import restores it only with the switch "Also restore settings when importing" (
 - label colours and order merged label by label (the newer wins, as sync does, then pushed),
 - collapsed notes added;
 - without the switch the import says the export has settings.
+
+**Unambiguous sections (2026-10-18; format 2, supersedes the 0.46.1–0.46.3 code-scanner fixes):** section framing is independent of Markdown syntax. Front matter contains `body_boundary: N`, a non-negative safe integer; `<!-- thundernotes:boundary:N -->` is the separator line. The writer chooses the smallest N for which that exact line occurs in none of the note texts. It writes the separator before each annotation heading and once at the end of the body. The first frame is `# Subject` plus the whole-email note; following frames start with the existing marked annotation heading. Notes keep their literal markers, indentation and unfinished code fences; no artificial fence or closing comment is inserted or removed. Leading/trailing separator blank lines are normalized, not content-line indentation or trailing spaces.
+
+The reader requires the final separator and rejects invalid boundary metadata, unknown section IDs, duplicate sections and duplicate front-matter IDs with `FormatError`. Missing annotation frames still mean empty notes. That strictness is for carriers (a damaged one stays unread and listed, D35). An import from the options page reads a file the user may have edited: an unknown or unmarked section, a duplicate section or a missing final separator doesn't fail the file, and nothing is dropped. Each section that can't be placed becomes a note of its own: a section for an unknown note is anchored at the quote its heading names (when the email still has that passage); a duplicate section goes on the same passage as the note it duplicates; a section without a marker keeps its heading as text and has no passage (the toolbar list shows it under "Not found in this view"). If the first frame lacks its `# Subject` heading, its entire non-empty text likewise becomes an unanchored note, rather than the whole-email note where a newer local version could discard it. Empty malformed frames create no note. Strict carrier reads still reject a missing title. Its id comes from its text (`recovered-<hash8>`), so importing the same file again finds the same note, and no merge can overwrite it with a newer local note, as happened when such text was added to the whole-email note (PR #7 review). The import result names each repair. What can't be framed at all (front matter, `body_boundary`) still fails. When editing a file, keep the structural boundary lines and section IDs intact; to insert a literal copy of the current separator, choose a different unused N and update the structural lines and front matter together. A Markdown viewer may display later sections as code if an earlier note has an unfinished fence; the interchange reader nevertheless preserves every section. It does not repair or reinterpret user Markdown.
+
+This is an intentional development-only format change: the add-on rejects version 1 files explicitly, with no heuristic compatibility path in it. There are no users. IndexedDB's data model is unchanged. Development data in format 1 is converted once, outside the add-on, by `scripts/migrate-format2/`: `migrate.py` rewrites an account's carriers on the IMAP server (dry run by default, read-only; `--apply` backs up the originals, uploads the converted carriers and only then deletes the old ones), and `convert.ts export` converts an export zip. Both read with a frozen copy of the format-1 reader and check that each converted file reads back to the same notes. The MIME carrier envelope remains version 1.
+
+**One Markdown parser (2026-10-18):** `core/src/markdown-structure.ts` creates the supported markdown-it dialect, supplies parser-derived code ranges, and owns the note-layout preprocessing and original-line map. Rendering and task extraction share both that preprocessing and the checklist-token predicate. Quote/list container boundaries and indentation are interpreted by markdown-it, not a second handwritten parser. Rendered checkboxes carry their original `data-line`; the card rejects missing or invalid mappings instead of guessing by checkbox order.
+
+The parser stays out of the message display script (D22). The renderer, in the background, marks what the card's menus need: each checkbox's source line, and on an `@` date that isn't ISO yet the date it would be (`data-iso`). "Copy task" checks the clicked line's shape only (`taskAtLine`; a rendered box or the editor's syntax tree has already ruled out code), and the background checks again with the parser before copying. "Convert to date" is worked out in the background (`convertLooseDate`). The live editor uses the text-level helpers (`looseDatesInText`, `labelsInText`): it knows its code blocks from its own syntax tree. A test fails if markdown-it gets bundled into the display script again. The display script is about 84 KiB (88 KiB before format 2, 184 KiB with the parser in it).
 
 ## D26 — The Experiment API also adds a ThunderNotes column (2026-10-15, accepted)
 Widens D19. The MailExtension API has no message-list columns; Thunderbird's internal `ThreadPaneColumns` module (`chrome://messenger/content/ThreadPaneColumns.mjs`, `addCustomColumn`) is meant for add-ons but only reachable from an Experiment.
@@ -413,6 +423,8 @@ Tab follows where Markdown has indentation (2026-10-16):
 Rejected:
 - an own contenteditable editor (undo, cursor around hidden markup, IME and paste would all be ours to get right) and
 - a textarea with a coloured overlay (markup can only be dimmed, not hidden).
+
+**The simple editor says so (2026-10-18, 0.46.2):** when the live editor can't be loaded and the textarea takes over, the card shows "Simple editor: the full editor couldn't be loaded. Your notes are safe; please report this", the reason on hover and in the error console. It should never appear on supported versions; it's there for a future Thunderbird change to what an email's scripts may load, or a bug in the editor, and silently it would never be reported.
 
 ## D29 — Highlight colours: a palette of 8 named colours (2026-10-15, accepted)
 Colours work as categories (concept), so a fixed palette instead of a colour picker: yellow (default and fallback), green, blue, pink, orange, red, purple, grey.
@@ -504,6 +516,8 @@ Before, the newer edit of a note replaced the whole note (and a colour change co
 - newer-wins with the older version in a box (a box even when the edits didn't touch the same lines);
 - CRDTs (Yjs/Automerge: machine state in the file, much more code, for short notes).
 
+**Equal times in sync (2026-10-18, 0.41.2; design review, issue #1):** two different texts with the same time and no known base become a conflict box when syncing (nothing lost); "the incoming text wins, stamped now" applies only on import, where equal times mean a file edited by hand (D25). Before, sync took the incoming text.
+
 ## D33 — Restore what was deleted on an email in the last 30 days (2026-10-16, accepted)
 Tombstones (D7) now keep a copy of the deleted highlight or note (its front-matter fields plus the note text, `note:`), and emptying the whole-email note keeps its text (`deleted_email_note`); both sync like the tombstones and are dropped with them after 30 days.
 
@@ -519,6 +533,12 @@ Tombstones (D7) now keep a copy of the deleted highlight or note (its front-matt
 - A copy could come back with a merge from a device that still has it, so the set records the time instead (`purged_before` in the file): copies of what was deleted up to then are dropped whatever a merge brings, the later purge wins; what is deleted afterwards can be restored again.
 - The tombstones stay, for the deletions to reach the other devices; a set left with nothing goes as after deleting the last note.
 
+**Deletion records outlive the restore window (2026-10-18, 0.41.3; design review, issue #1):**
+- After 30 days a deletion drops only its copy (no longer restorable); the bare record (note id and time, no text) stays for a year, then goes too. The same for a deleted whole-email note (its time only).
+- So a device that was away longer than 30 days doesn't bring deleted notes back. Known limit: a device away for more than a year still can.
+- An email whose notes were all deleted keeps its carrier (with only the records) for that year.
+- A note edited on another device after its deletion stays (the edit wins), as before.
+
 ## D34 — Draft autosave while a note is being edited (2026-10-16, accepted)
 Now the editor's text is kept as a draft in `storage.local` (this device only, key `drafts`, per email and note) 1.5 s after the last change, and dropped when editing ends, saved or discarded with Esc.
 
@@ -532,6 +552,8 @@ Now the editor's text is kept as a draft in `storage.local` (this device only, k
 - Drafts aren't synced: they belong to the device where the typing happened.
 
 **Rejected:** saving to the note itself while typing (a new carrier revision every few seconds, and edits would reach other devices half-written).
+
+**A failed save keeps the text (2026-10-18, 0.46.1; issue #6):** leaving the editor no longer deletes the draft; it goes only when the save succeeded (or the edit is discarded with Esc). Saving fails: the card says so and offers the text back ("Not saved (…). Your text is kept: restore it to try again"). Before, the draft was deleted before saving, so a failed save lost what was typed.
 
 ## D35 — A visible warning when sync isn't working (2026-10-16, accepted)
 Now each account's sync outcome is recorded (`storage.local`, `syncProblems`); after 2 failures in a row (one can be a passing network hiccup) the header button gets an orange warning triangle in its icon, its tooltip names the account, and the toolbar list opens with "Sync of <account> with the mail server isn't working since <time>: <reason>".
@@ -554,6 +576,15 @@ Now each account's sync outcome is recorded (`storage.local`, `syncProblems`); a
 - **Icon:** The corner triangle was too easy to miss: the whole post-it turns red and unhappy (`icons/icon-sad.svg`).
 - **Explanation:** The toolbar list's red line opens an explanation of the kind and what helps, and that the notes are safe on this computer.
 - **Possible later:** warn anyway when Thunderbird is online, the account's other folders sync, and ThunderNotes hasn't synced for over an hour.
+
+**Unreadable carriers are kept (2026-10-18, 0.41.1; design review, issue #1):**
+- A carrier that can't be read (damaged, a newer format, notes for another email than its headers name) is never removed by cleanup as an old revision: it may hold notes no other device has. Only the user removes it (from the toolbar list), and its warning stays until then, whatever else syncs fine.
+- Read again after an update of the add-on: a newer version may understand it.
+- Consolidating several carriers of one email goes by the readable ones only.
+- A new revision is recorded before the old ones are deleted: a crash in between leaves a duplicate (cleaned up at the next check), never a gap.
+- Before 0.41.1 an unreadable carrier was deleted at the next upload of notes on the same email (lost if no other device had read it).
+
+**Only merged carriers are removed (2026-10-18, 0.46.4; dev issue #1):** cleanup removes only carriers whose content has been merged on this device. A carrier whose reading failed for the connection (a timeout) stays unmerged until a later check reads it; before, the next upload of notes on the same email deleted it, its notes merged nowhere. The same applies to the settings carrier.
 
 ## D36 — An unsubscribed carrier folder is subscribed again (2026-10-16, accepted)
 If the folder exists but isn't subscribed, it is subscribed again; once Thunderbird shows it, sync carries on and a notice explains it ("…was unsubscribed. ThunderNotes … can't reach an unsubscribed folder, so it has subscribed it again. To remove ThunderNotes for good, uninstall the add-on first, then delete the folder.").
@@ -863,7 +894,7 @@ The date is text and can be edited: anything not of the form `✅ YYYY-MM-DD` is
 
 Sub-tasks (2026-10-18, 0.38.0): a checklist item indented under another one in the same note is its sub-task (found over continuation lines, sibling items and blank lines; the list ends at unindented text); under a plain bullet or number, that item's text says what it is part of (it is no task and gets no row).
 
-- Each task keeps its own row and group; a sub-task shows "↳ part of “…”" in its email line (a click selects the parent task; not shown with the filter: a notice), a task with sub-tasks a badge "2/5" (done of all, direct ones).
+- Each task keeps its own row and group; a sub-task shows "↳ part of “…”" at the end of its email line (after the email link, 0.42.2) (a click selects the parent task; not shown with the filter: a notice), a task with sub-tasks a badge "2/5" (done of all, direct ones).
 - Grouped by email, sub-tasks are indented under their parents (24 px per level, note order), without "part of" there (the indent shows it; kept when the parent isn't listed or is a bullet), and done ones shown inline stay in the order written, under their parents, not last (0.38.2).
 - The lanes run left of every row they join and every row they pass (a parent sits less indented, its arrow pointed backwards; a sub-task whose parent is hidden as done sits further out in between, the line ran through its box, 0.38.7).
 - The expanded note preview indents nested items (0.38.2).
@@ -884,6 +915,10 @@ Later: the whole tree from the selected task (trunks side by side, see BACKLOG).
 ### Stage 3
 
 Stage 3 (reminders) follows.
+
+**Ticking in the shown note (2026-10-18; issues #4, #5):** the renderer writes each checkbox's original source line in `data-line`, using the line map maintained during blank-line preprocessing. Ticking and “Copy task as Markdown” use that line. Task extraction and rendering share the parser configuration, preprocessing and checklist-token predicate in `markdown-structure.ts` (D25). Tests compare real rendered boxes against extracted tasks across quoted/list-contained fences, nested and mixed fences, indented code and blank-line combinations, and exercise the real NoteCard's clicks. Missing, fractional, negative and out-of-range source mappings are ignored; the old ordinal fallback is removed.
+
+**Dates in pasted Markdown (2026-10-18; PR #7 follow-up):** insert the clipboard text first, then use CodeMirror's syntax tree for the resulting document to exclude fenced, indented and inline code from numeric-date conversion. The old insertion point alone cannot classify code contained in the paste or prose after a pasted closing fence. CRLF is normalized before mapping offsets; conversion remains its own undo step. Parsing is bounded to 50 ms; if the tree is unavailable, keep the paste without automatic correction rather than altering possible code. No markdown-it dependency is added to the display/editor bundles.
 
 ## D39 — The link picker: [[, << or Cmd/Ctrl+K (2026-10-16, accepted)
 Refines D37. Typing `[[` or `<<` in a note (outside code) opens a search box at the cursor; the two characters make way for the link, and Esc puts them back.
@@ -941,9 +976,57 @@ Extended 2026-10-17 (0.28.0): the labels' **order** is a setting too: most used 
 - Synced in the settings carrier as a whole, the latest arrangement wins (merging two arrangements would surprise); choosing another order keeps the own one to come back to.
 - One own order only: several saved orders would be overengineering; if contexts need switching, saved views (filter, grouping, order together) would be the tool, later if missed.
 
+**Per account since D42 (2026-10-18):** each account has its own label colours and order, synced through its own settings carrier; before, one set went to every account.
+
+**Deleting a label (2026-10-18, 0.44.0):** right-click a chip in the task view's label row → "Delete label…": asked again (how many tasks it's on, in which accounts), then taken out of every note it is in, in all accounts or in the one the view is narrowed to (D42); each change is an edit like any other (synced, open emails redrawn), with Undo for a few seconds (a note changed since is left as it is). Not in code blocks. Its colour stays in the settings (unused; it comes back should the label be used again).
+
 ## D41 — Minimum Thunderbird version: the current ESR, 153 (2026-10-17, accepted)
 The add-on requires Thunderbird 153 or newer (`strict_min_version` in `manifest.json`): the current extended-support release (ESR, "Meadow", July 2026), which organisations mostly run.
 
 - Replaces "Thunderbird ≥ 128" from the first concept, which was an assumption, never tested.
 - Tested so far only on Thunderbird 158 (the monthly release). Not yet tested on 153 ESR; most at risk is the Experiment, which uses Thunderbird internals (print menus, message list, message pane) that change between versions.
 - The previous ESR line (140) isn't supported: it would need its own testing for little gain.
+
+## D42 — Notes belong to an email in one account (2026-10-18, accepted; refines D2, D4, D27, D40)
+An email's notes are identified by its Message-ID **and the account it is in**: the same message in a work and a personal account has two independent sets of notes, each synced only through its own account's `ThunderNotes` folder. Each account is its own world: work notes never reach the personal server and the other way round.
+
+Raised by the design review (public issue #1): before, notes were one set per Message-ID for the whole profile, synced through the account where the first note was made, so a note on the personal copy could go to the work server; moving an email didn't move its notes; label settings went to every account.
+
+### Across devices
+- The account a note belongs to is where it is stored: that account's `ThunderNotes` folder. Another device reads the folder and files what it finds under its own copy of the same account. Thunderbird's internal account names ("account1"…) differ between computers and are never written into anything that syncs.
+- Notes, settings and label colours of an account therefore sync between all devices that have that account, and only there.
+
+### Locally
+- The store keys a set by account and Message-ID. Sets from before (keyed by Message-ID only) keep the account they synced through; sets without one get the account of the first copy found, as before.
+- Moving an email to another account (or to Local Folders) takes its notes along: they leave the old account's folder and go to the new one's. Copying doesn't copy notes.
+- An account removed from Thunderbird: its notes stay on this computer, not synced; the options page says how many there are (export keeps them).
+- Moved back (Thunderbird's Undo): the notes come back; carried notes count as changed at the move, so the deletion records the first move left there don't delete them.
+- A save that arrives after switching emails names the email and its account, so it never lands on the same email's copy in another account. Unsaved drafts (D34) are kept per account too. Folded cards (D30) stay per Message-ID: the same email folds alike in both accounts.
+- The address in an imported file only finds the account; it isn't stored or synced (else a moved set would carry the old account's address to the new server).
+- A file naming an account that isn't in Thunderbird (unknown, or removed) never goes to another account (2026-10-18, 0.46.4; dev issue #4): its notes wait on this computer, unassigned, not synced, not tagged and not shown in any email. The import result and the options page (Sync) name the address; once an account with that address (any of its identities) is added, the notes go to it. Only files without an address get the account of the first copy found.
+- The `$annotated` tag, backlinks and the task view's "open email" work on the copies in the note's own account.
+
+### Label colours and order per account
+- Each account has its own label colours and order (its own settings carrier, D40); Local Folders and POP accounts keep theirs on this computer. On the first start after the change every account starts with the colours and order used so far.
+- A label is drawn in the colour of its note's account. In the task view across all accounts, a chip uses the colour and order of the first account (in Thunderbird's account order) that has it; coloured differently in the accounts using it, the chip (and a label heading) is split into side-by-side segments, one per distinct colour in account order, at most four, an account without a colour for it a neutral one, its tooltip naming each account's colour (0.46.0); choosing a colour or an order there applies to every account that uses the label, on a task to that task's account. In an email, a colour chosen on a card applies to that email's account only (0.46.4; before, it went to every account, dev issue #3).
+
+### Files
+- Export and import: the front matter names the account by its address (`account: you@private.example`), so an import lands in the matching account on any computer; files without it get the account of the first copy found. Two sets of the same email get different file names.
+- The task view shows all accounts, each task with its account; a filter narrows it to one account.
+
+## D43 — Deleted emails are left alone (2026-10-18, accepted)
+An email moved to the Trash is ignored by ThunderNotes: its tasks leave the task view and the overdue count, and its notes are no longer offered by the link picker or shown as backlinks. The notes themselves are kept (and synced as before): restored from the Trash, the email has them all again.
+
+- An email counts as deleted when every copy of it in its account (carrier folders aside) is in a folder Thunderbird marks as Trash (`specialUse: trash`). A copy elsewhere (the Sent copy, the inbox) keeps it alive.
+- Deleted for good (emptied from the Trash): ignored the same way. An email Thunderbird merely can't find is never taken as deleted: a failed lookup must not hide notes.
+- Kept up to date when emails are moved, copied or deleted, and checked once a little after Thunderbird starts (emails deleted while the add-on wasn't running, or before this decision). The list lives on this device (`deletedEmails` in local storage); each device works it out from its own folders.
+- Not included: the Junk folder (could be added the same way if wanted).
+
+## D44 — Notes whose email can't be found (2026-10-18, accepted)
+An email removed outside Thunderbird (in webmail, another client, on the server) just vanishes from its folder; Thunderbird doesn't report that as a deletion, and its notes, safely in their carrier, stay. They are kept, never hidden by themselves (a failed lookup must not hide notes, D43), but shown as what they are and deletable:
+
+- When Thunderbird starts (a little later) and whenever the task view or the options page opens (at most once a minute), every email with notes is looked up in its account. Not found: marked "missing" (in the same local list as D43).
+- Task view: such a task's email line reads "<subject> – email not found", the last words red, bold and italic (nothing to open; the arrow still shows the whole note). Hovering it shows: "This task comes from a note in an email that's not on the server anymore. The recommended action is to delete the notes that relate to that email in the settings", "settings" a link to the options page, which scrolls to that email in the list and frames its Delete button for a moment. The marker itself is a link too (0.45.3): both open the settings in a tab of their own (inside the Add-ons Manager the page can't scroll to a section), jumping straight to "Orphaned notes"; a settings tab open already is brought to the front. No action on the task's own menu (0.45.1): a task's menu acting on a whole note was unexpected.
+- Options page, a card "Orphaned notes" of its own (shown only when there are any, between "Sync" and "Devices", 0.45.2): a list of the notes whose email can't be found (subject, date, account, how many), each with Show (all its notes as text, also those without tasks) and Delete (two clicks).
+- Deleting is an ordinary deletion of every note on the email: synced (the carrier then holds only deletion records, D33).
+- Found again (the account synced late, the email restored): the mark goes by itself.

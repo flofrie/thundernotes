@@ -79,6 +79,24 @@ To be converted into GitHub issues and milestones.
 - [ ] When a third display setting shared by several parts comes up: one "apply display settings" function each part calls (now wired separately: hide current year, past due dates red)
 - [ ] Notion two-way sync
 
+### From the design review (public issue #1, 2026-10-18)
+- [x] PR #7 follow-up: recover a first frame with a missing/malformed title as an unanchored note; test strict rejection, text/export preservation and the options-page merge/save/reimport path.
+- [x] PR #7 review: repaired import sections become notes of their own (no merge can overwrite them); use the post-paste CodeMirror tree to preserve code examples during date conversion.
+- [x] Markdown structure: use markdown-it block ranges and a shared render/extraction pipeline; source-mapped checkbox clicks without ordinal fallback (development #5).
+- [x] Format 2: collision-free section boundaries independent of Markdown, no generated-fence stripping or legacy heuristics; round-trip and malformed-frame regressions (public #4).
+- [x] (0.41.1) Sync: quarantine unreadable/unsupported carriers; never delete them in cleanup; remove old revisions only once the replacement is uploaded and recorded (confirmed loss path: `mergeRemote` marks a failed read as merged, `push` then deletes it). Tests: malformed attachment, newer format version, crash between upload and cleanup.
+- [x] (0.41.2) Merge: equal times without a known base give a conflict box in sync mode (was "incoming wins", the import rule).
+- [x] (0.46.4) Dev issues #1, #3, #4: a carrier not read for a connection problem isn't removed by cleanup; a label colour chosen in an email stays in its account; an import naming an account not in Thunderbird waits for it instead of going to another account.
+- [ ] Rendering: blank-line padding (a no-break-space paragraph) ends a list, so a list item's continuation paragraph indented 4+ is drawn as code while labels and dates treat it as text (older than format 2; PR #6 discussion). Pad without ending lists, then take "what is code" from the one parse of the padded text.
+- [ ] Performance: `tasksIn` parses a note 4 times (about 175 ms for 500 notes of 60 lines); 2 should do (PR #6 discussion).
+- [ ] Merge spec: a short normative merge spec; scenarios for 3 devices, reordered/replayed carriers, intentional reverts, missing bases.
+- [x] (0.41.3) Deletions: compact deletion records (id + time, no text) kept for a year beyond the 30-day restore window, so a stale device can't resurrect deleted notes (limit: away over a year).
+- [x] (0.42.0, D42) Identity/routing: notes per account (Message-ID + account), moves take notes along, removed accounts shown, label settings per account. Still open: an exact fingerprint recipe for emails without Message-ID.
+- [ ] Docs: remove the old time-reference sketch (`@due`, times), `[[` listed as open, done grouping; storage authority without the helper (IndexedDB is the local truth, Markdown the interchange format).
+- [ ] Anchoring: a confidence policy for ambiguous matches (repeated quotes, signatures) and what the user sees; reconsider "reattach to selection".
+- [ ] Tested-versions matrix (Thunderbird, OS, server); 153 ESR check; degraded behaviour when an Experiment function fails.
+- [ ] D15: state "no classic Outlook" as a scope choice (Office.js add-ins do run on classic Outlook).
+
 ## Later — Outlook (D15)
 - [ ] Office.js task-pane add-in for Microsoft 365/Exchange mailboxes
 - [ ] Graph storage adapter (hidden folder, same carrier format)

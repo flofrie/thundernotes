@@ -11,6 +11,8 @@ import { exportDue, formatDate, recordExport } from "./backup.js";
 import { getAllSets, getSet, putSet } from "./store.js";
 import type { ToContent } from "./protocol.js";
 import { tagCopies as tagAllCopies } from "./tags.js";
+import { accountByAddress, addressesById } from "./accounts.js";
+import { IGNORED_KEY, ignoredKey, isMissing, type Ignored } from "./deleted.js";
 import { SETTINGS_FILE, buildSettingsFile, parseSettingsFile, type SettingsFile } from "./settings-file.js";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -21,7 +23,12 @@ function status(text: string, error = false): void {
 }
 
 async function exportAll(): Promise<void> {
-  const sets = (await getAllSets()).filter(hasContent);
+  // Each file names its account by address (D42), so an import finds it on any computer.
+  const addresses = await addressesById();
+  const sets = (await getAllSets()).filter(hasContent).map((s) => {
+    const account = s.email.accountId ? addresses.get(s.email.accountId) : undefined;
+    return account ? { ...s, email: { ...s.email, account } } : s;
+  });
   const files: Record<string, Uint8Array> = {};
   for (const set of sets) files[fileName(set)] = strToU8(toMarkdown(set));
   // What the notes' files don't hold: settings, label colours and order, the task view's choices.
@@ -69,15 +76,15 @@ const COLLAPSED_KEY = "foldedCards";
 const LAST_COLOUR_KEY = "lastColour";
 
 async function currentSettingsFile(): Promise<string> {
-  const stored = await messenger.storage.local.get([...SETTINGS.map((s) => s.key), LAST_COLOUR_KEY, "labelColours", "labelOrder", COLLAPSED_KEY]);
+  const stored = await messenger.storage.local.get([...SETTINGS.map((s) => s.key), LAST_COLOUR_KEY, "labelSettings", COLLAPSED_KEY]);
   const options: Record<string, boolean | string> = {};
   for (const { key, on } of SETTINGS) options[key] = stored[key] === undefined ? on : stored[key] === true;
   if (typeof stored[LAST_COLOUR_KEY] === "string") options[LAST_COLOUR_KEY] = stored[LAST_COLOUR_KEY] as string;
-  const labels: Settings = {
-    version: 1,
-    labelColours: (stored.labelColours as Settings["labelColours"] | undefined) ?? {},
-    ...(stored.labelOrder ? { labelOrder: stored.labelOrder as Settings["labelOrder"] } : {}),
-  };
+  // Per account by address (D42); `labels` stays for older versions reading the file: the first account's.
+  const addresses = await addressesById();
+  const byId = (stored.labelSettings as Record<string, Settings> | undefined) ?? {};
+  const labelsByAccount = Object.fromEntries(Object.entries(byId).flatMap(([id, s]) => (addresses.has(id) ? [[addresses.get(id)!, s]] : [])));
+  const labels: Settings = Object.values(byId)[0] ?? { version: 1, labelColours: {} };
   let taskView: unknown;
   try {
     taskView = JSON.parse(localStorage.getItem(TASK_VIEW_KEY) ?? "null") ?? undefined;
@@ -85,7 +92,7 @@ async function currentSettingsFile(): Promise<string> {
     taskView = undefined;
   }
   const collapsed = stored[COLLAPSED_KEY] as Record<string, boolean> | undefined;
-  return buildSettingsFile({ options, labels, ...(taskView !== undefined ? { taskView } : {}), ...(collapsed && Object.keys(collapsed).length ? { collapsed } : {}) });
+  return buildSettingsFile({ options, labels, labelsByAccount, ...(taskView !== undefined ? { taskView } : {}), ...(collapsed && Object.keys(collapsed).length ? { collapsed } : {}) });
 }
 
 /**
@@ -96,20 +103,22 @@ async function currentSettingsFile(): Promise<string> {
 async function restoreSettings(file: SettingsFile): Promise<void> {
   const known = new Set([...SETTINGS.map((s) => s.key), LAST_COLOUR_KEY]);
   const options = Object.fromEntries(Object.entries(file.options).filter(([k]) => known.has(k)));
-  const stored = await messenger.storage.local.get(["labelColours", "labelOrder", COLLAPSED_KEY]);
-  const here: Settings = {
-    version: 1,
-    labelColours: (stored.labelColours as Settings["labelColours"] | undefined) ?? {},
-    ...(stored.labelOrder ? { labelOrder: stored.labelOrder as Settings["labelOrder"] } : {}),
-  };
-  const labels = mergeSettings(here, file.labels);
+  const stored = await messenger.storage.local.get(["labelSettings", COLLAPSED_KEY]);
+  // Label settings (D42): each account's from the file by its address, merged label by label (the
+  // newer wins, as sync does); an older file's one set goes to every account.
+  const byId = { ...((stored.labelSettings as Record<string, Settings> | undefined) ?? {}) };
+  const incoming: [string, Settings][] = [];
+  if (file.labelsByAccount) {
+    for (const [address, s] of Object.entries(file.labelsByAccount)) {
+      const id = await accountByAddress(address);
+      if (id) incoming.push([id, s]);
+    }
+  } else {
+    for (const a of await messenger.accounts.list(false)) incoming.push([a.id, file.labels]);
+  }
+  for (const [id, s] of incoming) byId[id] = mergeSettings(byId[id] ?? { version: 1, labelColours: {} }, s);
   const collapsed = { ...((stored[COLLAPSED_KEY] as Record<string, boolean> | undefined) ?? {}), ...(file.collapsed ?? {}) };
-  await messenger.storage.local.set({
-    ...options,
-    labelColours: labels.labelColours,
-    ...(labels.labelOrder ? { labelOrder: labels.labelOrder } : {}),
-    [COLLAPSED_KEY]: collapsed,
-  });
+  await messenger.storage.local.set({ ...options, labelSettings: byId, [COLLAPSED_KEY]: collapsed });
   if (file.taskView !== undefined) {
     try {
       localStorage.setItem(TASK_VIEW_KEY, JSON.stringify(file.taskView));
@@ -122,9 +131,26 @@ async function restoreSettings(file: SettingsFile): Promise<void> {
   showExamples();
 }
 
-/** Tags every copy of the email that Thunderbird has (by Message-ID). */
+/** Tags the email's copies in the notes' account (D42); notes waiting for their account tag nothing. */
 async function tagCopies(set: AnnotationSet): Promise<void> {
-  if (hasContent(set)) await tagAllCopies(set.email.messageId, true, "ThunderNotes");
+  if (hasContent(set) && (set.email.accountId || !set.email.account)) await tagAllCopies(set.email.messageId, true, "ThunderNotes", set.email.accountId);
+}
+
+/**
+ * The account an imported set belongs to (D42). `pending`: the file names an account that isn't
+ * in Thunderbird; the notes wait for it (never go to another one, dev issue #4).
+ */
+async function importAccount(set: AnnotationSet): Promise<{ accountId?: string; pending?: string }> {
+  if (set.email.account) {
+    const named = await accountByAddress(set.email.account);
+    return named ? { accountId: named } : { pending: set.email.account };
+  }
+  // Files from before D42 name no account: the one that has notes on the email, else the first copy's.
+  const id = set.email.messageId.replace(/^<|>$/g, "");
+  const withNotes = (await getAllSets()).filter((s) => s.email.accountId && s.email.messageId.replace(/^<|>$/g, "") === id);
+  if (withNotes.length === 1) return { accountId: withNotes[0]!.email.accountId };
+  const copy = (await messenger.messages.query({ headerMessageId: id }).catch(() => null))?.messages.find((m) => m.folder?.accountId && m.folder.name !== "ThunderNotes");
+  return { accountId: copy?.folder?.accountId };
 }
 
 /** Open messages redraw with the imported notes. Tabs without our display script just fail. */
@@ -142,15 +168,34 @@ async function importFiles(files: FileList): Promise<void> {
   let merged = 0;
   let unchanged = 0;
   const problems: string[] = [];
+  const repaired: string[] = [];
+  const waiting = new Set<string>();
   for (const { name, text } of texts) {
     let incoming: AnnotationSet;
     try {
-      incoming = fromMarkdown(text);
+      // An exported file may have been edited: a section that can't be placed is kept as a note
+      // of its own, and said so, instead of failing the file.
+      const found: string[] = [];
+      incoming = fromMarkdown(text, { onProblem: (message) => found.push(message) });
+      if (found.length) repaired.push(`${name}: ${found.join("; ")}`);
     } catch (e) {
       problems.push(`${name}: ${(e as Error).message}`);
       continue;
     }
-    const local = await getSet(incoming.email.messageId);
+    // Its account (D42): named in the file, else the one that has notes on the email, else the
+    // first copy's (none: assigned when the email is shown or synced).
+    const { accountId, pending } = await importAccount(incoming);
+    incoming = { ...incoming, email: { ...incoming.email, ...(accountId ? { accountId } : {}) } };
+    // The address only finds the account: kept while that account isn't in Thunderbird (the notes
+    // go to it once it is added), never synced.
+    if (!pending) delete incoming.email.account;
+    const local = await getSet(accountId, incoming.email.messageId);
+    // Not assigned either (one place per email): notes for two different accounts stay apart.
+    if (!accountId && local && (local.email.account ?? "") !== (incoming.email.account ?? "")) {
+      problems.push(`${name}: notes on this email already wait for ${local.email.account ? `the account ${local.email.account}` : "their account"}; add that account to Thunderbird and import again.`);
+      continue;
+    }
+    if (pending) waiting.add(pending);
     let result = incoming;
     if (!local) {
       created++;
@@ -174,6 +219,12 @@ async function importFiles(files: FileList): Promise<void> {
     lines.push("Settings restored from the export.");
   } else if (settings) {
     lines.push('The export also has settings: switch on "Also restore settings" and import again to restore them.');
+  }
+  if (waiting.size) {
+    lines.push(`Some notes are for an account that isn't in Thunderbird (${[...waiting].join(", ")}): kept on this computer, not synced and not shown, until that account is added.`);
+  }
+  if (repaired.length) {
+    lines.push(`Imported with repairs (each section that couldn't be placed is a note of its own; where it can't be shown on the email, the toolbar list has it under "Not found in this view") ${repaired.length}:`, ...repaired.map((p) => `• ${p}`));
   }
   if (problems.length) lines.push(`Skipped ${problems.length}:`, ...problems.map((p) => `• ${p}`));
   if (created + merged || (settings && isOn("importSettings"))) {
@@ -307,8 +358,148 @@ async function showSyncStatus(): Promise<void> {
     li.append(dot, name, state);
     list.append(li);
   }
+  // Notes of accounts removed from Thunderbird (D42): kept here, not synced; the export keeps them.
+  const known = new Set(accounts.map((a) => a.id));
+  const orphaned = (await getAllSets()).filter((s) => hasContent(s) && s.email.accountId && !known.has(s.email.accountId)).length;
+  // Imported for an account that isn't in Thunderbird (dev issue #4): waiting for it.
+  const waiting = (await getAllSets()).filter((s) => hasContent(s) && !s.email.accountId && s.email.account);
+  if (waiting.length) {
+    const li = document.createElement("li");
+    const dot = document.createElement("span");
+    dot.className = "dot off";
+    const state = document.createElement("span");
+    state.className = "state";
+    const addresses = [...new Set(waiting.map((s) => s.email.account!))].join(", ");
+    state.textContent = `Notes on ${waiting.length} email${waiting.length === 1 ? "" : "s"} were imported for an account that isn't in Thunderbird (${addresses}): kept on this computer, not synced. They go to that account once it is added.`;
+    li.append(dot, state);
+    list.append(li);
+  }
+  if (orphaned) {
+    const li = document.createElement("li");
+    const dot = document.createElement("span");
+    dot.className = "dot off";
+    const state = document.createElement("span");
+    state.className = "state";
+    state.textContent = `Notes on ${orphaned} email${orphaned === 1 ? "" : "s"} belong to an account no longer in Thunderbird: kept on this computer, not synced. Export keeps them.`;
+    li.append(dot, state);
+    list.append(li);
+  }
 }
 showSyncStatus();
+
+/** Notes whose email can't be found (D44): listed with Show and Delete. */
+async function showMissing(): Promise<void> {
+  const ignored = ((await messenger.storage.local.get(IGNORED_KEY))[IGNORED_KEY] as Ignored | undefined) ?? {};
+  const names = new Map((await messenger.accounts.list(false)).map((a) => [a.id, a.name]));
+  const sets = (await getAllSets()).filter((s) => hasContent(s) && isMissing(ignored, s));
+  const list = $("missingList");
+  list.replaceChildren();
+  ($("missing") as HTMLElement).hidden = !sets.length;
+  for (const set of sets) {
+    const li = document.createElement("li");
+    li.dataset.key = ignoredKey(set.email.accountId, set.email.messageId);
+    const line = document.createElement("div");
+    line.className = "line";
+    const what = document.createElement("span");
+    what.className = "what";
+    const count = set.annotations.length + (set.emailNoteMd ? 1 : 0);
+    what.textContent = `“${set.email.subject || "(no subject)"}” · ${count} note${count === 1 ? "" : "s"}`;
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = [set.email.date ? formatDate(set.email.date) : "", names.get(set.email.accountId ?? "") ?? ""].filter(Boolean).join(" · ");
+    const show = document.createElement("button");
+    show.textContent = "Show";
+    const del = document.createElement("button");
+    del.className = "delete";
+    del.textContent = "Delete";
+    let box: HTMLPreElement | null = null;
+    show.addEventListener("click", () => {
+      if (box) {
+        box.remove();
+        box = null;
+        show.textContent = "Show";
+        return;
+      }
+      box = document.createElement("pre");
+      const parts = [
+        ...(set.emailNoteMd ? [`On the whole email:\n${set.emailNoteMd}`] : []),
+        ...set.annotations.map((a) => {
+          const quote = a.selectors.find((s) => s.type === "TextQuoteSelector") as { exact?: string } | undefined;
+          return `On “${quote?.exact ?? ""}”:\n${a.bodyMd || "(highlight only)"}`;
+        }),
+      ];
+      box.textContent = parts.join("\n\n");
+      li.append(box);
+      show.textContent = "Hide";
+    });
+    // Two clicks, as in the toolbar list: the second confirms. Armed, the button turns red; not
+    // clicked again within 4 seconds, it goes back to "Delete".
+    let disarm = 0;
+    del.addEventListener("click", async () => {
+      if (del.dataset.armed !== "1") {
+        del.dataset.armed = "1";
+        del.classList.add("armed");
+        del.textContent = "Click again to delete";
+        disarm = window.setTimeout(() => {
+          delete del.dataset.armed;
+          del.classList.remove("armed");
+          del.textContent = "Delete";
+        }, 4000);
+        return;
+      }
+      clearTimeout(disarm);
+      del.disabled = true;
+      await messenger.runtime.sendMessage({ type: "deleteNotesOf", accountId: set.email.accountId, messageId: set.email.messageId }).catch(() => null);
+      await showMissing();
+    });
+    line.append(what, when, show, del);
+    li.append(line);
+    list.append(li);
+  }
+}
+// The list at once from what is known; again after the emails were checked, if it changed.
+const missingShown = showMissing();
+void messenger.runtime
+  .sendMessage({ type: "checkEmails" })
+  .catch(() => {})
+  .then(async () => {
+    await missingShown;
+    const before = [...$("missingList").children].map((li) => (li as HTMLElement).dataset.key).join();
+    const ignored = ((await messenger.storage.local.get(IGNORED_KEY))[IGNORED_KEY] as Ignored | undefined) ?? {};
+    const now = (await getAllSets()).filter((s) => hasContent(s) && isMissing(ignored, s)).map((s) => ignoredKey(s.email.accountId, s.email.messageId)).join();
+    if (now !== before) await showMissing();
+  });
+
+// Opened in a tab of its own (from the task view, D44): it answers, so it is brought to the front
+// instead of opened again. Not inside the Add-ons Manager (it couldn't jump there).
+const ownTab = new URLSearchParams(location.search).has("tab");
+messenger.runtime.onMessage.addListener((message: { type?: string }) => {
+  if (message?.type !== "optionsTab" || !ownTab) return undefined;
+  return messenger.tabs.getCurrent().then((tab) => (tab?.id !== undefined ? { tabId: tab.id, windowId: tab.windowId } : undefined));
+});
+
+/**
+ * Come from the task view's "settings" link (D44): to the list, that email's Delete button framed
+ * for a moment. Also when this page was open already (the link only brings it to the front).
+ */
+async function applyFocus(): Promise<void> {
+  const { optionsFocus: f } = (await messenger.storage.local.get("optionsFocus")) as { optionsFocus?: { section: string; key: string; at: number } | null };
+  if (!f || f.section !== "missing" || Date.now() - f.at > 60_000) return;
+  await messenger.storage.local.set({ optionsFocus: null });
+  await missingShown;
+  const row = [...$("missingList").children].find((li) => (li as HTMLElement).dataset.key === f.key);
+  const target = (row?.querySelector("button.delete") as HTMLElement | null) ?? $("missing");
+  // Straight there: the card's top at the top of the window.
+  ($("missing").hidden ? $("sync") : $("missing")).scrollIntoView?.({ block: "start" });
+  target.classList.remove("flash");
+  void target.offsetWidth; // restart the animation
+  target.classList.add("flash");
+  setTimeout(() => target.classList.remove("flash"), 3000);
+}
+void applyFocus();
+messenger.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && (changes as Record<string, { newValue?: unknown }>).optionsFocus?.newValue) void applyFocus();
+});
 
 $("syncNow").addEventListener("click", async () => {
   const button = $("syncNow") as HTMLButtonElement;

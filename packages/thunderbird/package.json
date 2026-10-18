@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsc -b && node build.mjs",
     "watch": "tsc -b ../core && node build.mjs --watch",
-    "test": "vitest run",
+    "test": "tsc -b ../core && vitest run",
     "package": "npm run build && node package.mjs"
   }
 }

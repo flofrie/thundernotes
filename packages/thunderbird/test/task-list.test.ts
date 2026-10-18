@@ -205,7 +205,7 @@ describe("sub-tasks (D38)", () => {
     const byText = Object.fromEntries(collectTasks([set]).map((t) => [t.text, t]));
     expect(byText.parent!.children).toHaveLength(2);
     expect(byText.parent!.childrenDone).toBe(1);
-    expect(byText.one!.parentKey).toBe("m@x|email-note|0");
+    expect(byText.one!.parentKey).toBe("|m@x|email-note|0");
     expect(byText.two!.partOf).toBe("parent");
     expect(byText.three!.partOf).toBe("Topic");
     expect(byText.three!.parentKey).toBeUndefined();

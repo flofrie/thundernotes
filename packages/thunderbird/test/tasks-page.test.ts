@@ -26,9 +26,11 @@ describe("task view page (D38)", () => {
     document.body.innerHTML = body.replace(/<script[^>]*><\/script>/, "");
     const sent: { type: string }[] = [];
     (globalThis as any).messenger = {
-      runtime: { sendMessage: async (m: { type: string }) => (sent.push(m), true), onMessage: { addListener() {} } },
+      // The check of emails sent on opening (D44) isn't what these tests look at.
+      runtime: { sendMessage: async (m: { type: string }) => (m.type !== "checkEmails" && sent.push(m), true), onMessage: { addListener() {} } },
       storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } },
       tabs: { getCurrent: async () => ({ id: 1, windowId: 1 }) },
+      accounts: { list: async () => [] },
       windows: { openDefaultBrowser: async () => {} },
     };
     await import("../src/tasks.js");
@@ -111,10 +113,10 @@ describe("task view page (D38)", () => {
     expect(dots).toHaveLength(9); // eight colours and "no colour"
     expect(dots.at(-1)!.classList.contains("none")).toBe(true);
     dots[2]!.click();
-    expect(messages.at(-1)).toEqual({ type: "setLabelColour", label: chip.dataset.label, colour: "blue" });
+    expect(messages.at(-1)).toMatchObject({ type: "setLabelColour", label: chip.dataset.label, colour: "blue" });
     chip.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
     document.querySelector<HTMLElement>(".edit-menu button.swatch.none")!.click();
-    expect(messages.at(-1)).toEqual({ type: "setLabelColour", label: chip.dataset.label, colour: null });
+    expect(messages.at(-1)).toMatchObject({ type: "setLabelColour", label: chip.dataset.label, colour: null });
   });
 
   it("has its own right-click menu, none on empty space, an edit menu in the filter box", async () => {

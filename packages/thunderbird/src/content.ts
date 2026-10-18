@@ -35,7 +35,9 @@ let ref = "";
 // email) can reach the background after the tab already shows the next email; without the
 // name it was saved on that one.
 function send<K extends ToBackground["type"]>(request: Extract<ToBackground, { type: K }>): Promise<Responses[K]> {
-  return browser.runtime.sendMessage<Responses[K]>(ref ? { ...request, ref } : request);
+  // The email and its account (D42): a save arriving after switching to another email, or to the
+  // same email's copy in another account, still goes to the notes it was made in.
+  return browser.runtime.sendMessage<Responses[K]>(ref ? { ...request, ref, refAccount: accountId ?? "" } : request);
 }
 
 // crypto.randomUUID() needs a secure context; message documents are not one (spike finding).
@@ -213,8 +215,15 @@ const PICKER_KEY = "cmdKLinkPicker";
 const CONTRAST_KEY = "contrastText";
 const USE_LAST_KEY = "useLastColour";
 const LAST_KEY = "lastColour";
-// Label colours (D40), the same on all devices: a stylesheet in the shadow root, kept current.
-const LABEL_COLOURS_KEY = "labelColours";
+// Label colours (D40) of this email's account (D42), the same on all its devices: a stylesheet in
+// the shadow root, kept current.
+const LABEL_SETTINGS_KEY = "labelSettings";
+let labelSettings: Record<string, { labelColours?: LabelColours }> = {};
+let accountId: string | undefined;
+function applyLabelColours(): void {
+  labelColours = (accountId && labelSettings[accountId]?.labelColours) || {};
+  labelStyle.textContent = labelColourCss(labelColours);
+}
 // Lines from note cards to their highlights (D23): on screen (off by default) and when printing
 // with notes (on by default). Drawn when either is on; CSS shows them where wanted.
 const LINES_SCREEN_KEY = "linesScreen";
@@ -250,14 +259,14 @@ function applySettings(s: Record<string, unknown>): void {
   if (CONTRAST_KEY in s) document.documentElement.classList.toggle("thundernotes-contrast", s[CONTRAST_KEY] !== false);
   if (USE_LAST_KEY in s) useLastColour = s[USE_LAST_KEY] !== false;
   if (LAST_KEY in s && typeof s[LAST_KEY] === "string") lastColour = s[LAST_KEY] as string;
-  if (LABEL_COLOURS_KEY in s) {
-    labelColours = (s[LABEL_COLOURS_KEY] as LabelColours | undefined) ?? {};
-    labelStyle.textContent = labelColourCss(labelColours);
+  if (LABEL_SETTINGS_KEY in s) {
+    labelSettings = (s[LABEL_SETTINGS_KEY] as typeof labelSettings | undefined) ?? {};
+    applyLabelColours();
   }
   renderAddDots();
 }
 document.documentElement.classList.add("thundernotes-contrast"); // default on
-browser.storage.local.get([HINTS_KEY, CYCLE_KEY, RENUMBER_KEY, PICKER_KEY, CONTRAST_KEY, USE_LAST_KEY, LAST_KEY, OVERDUE_KEY, LABEL_COLOURS_KEY, YEAR_KEY, LINES_SCREEN_KEY, LINES_PRINT_KEY]).then(applySettings);
+browser.storage.local.get([HINTS_KEY, CYCLE_KEY, RENUMBER_KEY, PICKER_KEY, CONTRAST_KEY, USE_LAST_KEY, LAST_KEY, OVERDUE_KEY, LABEL_SETTINGS_KEY, YEAR_KEY, LINES_SCREEN_KEY, LINES_PRINT_KEY]).then(applySettings);
 browser.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   applySettings(Object.fromEntries(Object.entries(changes).map(([k, v]) => [k, v.newValue])));
@@ -327,8 +336,11 @@ async function readDrafts(): Promise<Drafts> {
   return stored && typeof stored === "object" ? (stored as Drafts) : {};
 }
 
+/** A draft's key: the email in its account (D42), and the note. */
+const draftKey = (id: string) => `${accountId ?? ""}|${ref} ${id}`;
+
 function draftFor(id: string): Draft | null {
-  const draft = drafts[`${ref} ${id}`];
+  const draft = drafts[draftKey(id)] ?? drafts[`${ref} ${id}`]; // the latter: kept before D42
   if (!draft) return null;
   // Saved after all (the page closed before the draft could be dropped): nothing to offer.
   const saved = id === EMAIL_NOTE_ID ? (set?.emailNoteMd ?? "") : (set?.annotations.find((a) => a.id === id)?.bodyMd ?? "");
@@ -336,7 +348,7 @@ function draftFor(id: string): Draft | null {
 }
 
 async function saveDraft(id: string, text: string | null): Promise<void> {
-  const key = `${ref} ${id}`;
+  const key = draftKey(id);
   // In memory at once (the margin may redraw before storage answers), then stored.
   if (text === null) delete drafts[key];
   else drafts[key] = { text, at: new Date().toISOString() };
@@ -381,6 +393,7 @@ function createMargin(collapsed: boolean, width: number | null): Margin {
       renumberLists: () => renumber,
       copyTask: (id, md, line) => void send({ type: "copyMarkdown", what: "task", id, md, line }),
       copyNote: (id, md) => void send({ type: "copyMarkdown", what: "note", id, md }),
+      convertLooseDate: (md, text, k) => send({ type: "convertLooseDate", md, text, k }),
       alwaysYear: () => alwaysShowYear(),
       searchEmails: (query) => send({ type: "searchEmails", query }),
       linkPicker: () => linkPicker,
@@ -1045,10 +1058,13 @@ function showCarrierCover(): void {
   set = loaded.set;
   folded = new Set(loaded.folded);
   ref = loaded.ref;
+  accountId = loaded.accountId;
+  applyLabelColours();
   drafts = await readDrafts();
   // Drafts of notes deleted since (on another device, say) are of no use.
   for (const key of Object.keys(drafts)) {
-    const id = key.startsWith(`${ref} `) ? key.slice(ref.length + 1) : null;
+    const prefix = draftKey("");
+    const id = key.startsWith(prefix) ? key.slice(prefix.length) : null;
     if (id && id !== EMAIL_NOTE_ID && !set?.annotations.some((a) => a.id === id)) void saveDraft(id, null);
   }
   margin = createMargin(loaded.marginCollapsed, loaded.marginWidth);

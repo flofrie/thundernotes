@@ -41,7 +41,8 @@ export function sameLabelColours(a: LabelColours, b: LabelColours): boolean {
  * (`.tn-label`), the editor (`.cm-tn-label`) and the task view (`.label-chip`), all of which
  * carry `data-label`.
  */
-export function labelColourCss(colours: LabelColours): string {
+/** `scope`: a selector the rules apply within (a task row of one account, D42); none: everywhere. */
+export function labelColourCss(colours: LabelColours, scope = ""): string {
   const rules: string[] = [];
   for (const [label, { colour }] of Object.entries(colours)) {
     if (!colour) continue;
@@ -49,7 +50,8 @@ export function labelColourCss(colours: LabelColours): string {
     const sel = `[data-label="${label.replace(/["\\]/g, "\\$&")}"]`;
     rules.push(
       // One class more than the chips' own rules (the editor's theme comes later in the cascade).
-      `.tn-chip.tn-label${sel}, .cm-tn-chip.cm-tn-label${sel}, .label-chip.label-chip${sel} { background: ${rgba(c, 0.3)}; border-color: ${darker(c)}; }`
+      [`.tn-chip.tn-label${sel}`, `.cm-tn-chip.cm-tn-label${sel}`, `.label-chip.label-chip${sel}`].map((s) => (scope ? `${scope} ${s}` : s)).join(", ") +
+        ` { background: ${rgba(c, 0.3)}; border-color: ${darker(c)}; }`
     );
   }
   return rules.join("\n");

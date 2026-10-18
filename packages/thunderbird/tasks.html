@@ -181,6 +181,9 @@
     .note-preview { margin: 6px 0 2px; padding: 6px 10px; font-size: 13px; border-left: 3px solid var(--chip-border);
                     background: var(--hover); border-radius: 0 6px 6px 0; overflow-wrap: anywhere; }
     .note-preview > :first-child { margin-top: 0; } .note-preview > :last-child { margin-bottom: 0; }
+    /* As in the note cards: no gaps of their own around paragraphs and lists; a blank line in the
+       note is an empty paragraph of its own, one line high (else each one took about three). */
+    .note-preview :is(p, ul, ol, li, blockquote, pre, h1, h2, h3, h4, h5, h6) { margin-top: 0; margin-bottom: 0; }
     .note-preview ul { padding-left: 1.3em; } .note-preview li.task { list-style: none; margin-left: -1.3em; }
     /* Nested lists indented (the hung checkbox cancelled the list's own indent). */
     .note-preview li > ul, .note-preview li > ol { padding-left: 2.6em; }
@@ -193,6 +196,13 @@
     /* The sender's address after the name: lighter, there to tell people apart. */
     .meta .address, h2 .address { opacity: 0.7; font-size: 0.95em; }
     .quote { font-style: italic; }
+    /* An email that can't be found any more (D44): its line greyed, nothing to open. */
+    .meta .missing { position: relative; font-style: italic; font-weight: 700; color: var(--red); cursor: pointer; outline: none; }
+    .meta .missing-tip { display: none; position: absolute; left: 0; top: 100%; z-index: 7; width: 300px; padding: 6px 9px; margin-top: 0;
+                         font: 12px/1.4 system-ui, sans-serif; font-style: normal; font-weight: 400; color: var(--fg); background: var(--bg);
+                         border: 1px solid var(--chip-border); border-radius: 6px; box-shadow: 0 2px 8px #0003; }
+    .meta .missing:hover .missing-tip, .meta .missing:focus .missing-tip { display: block; }
+    .meta .missing-tip a { color: var(--accent); text-decoration: underline; cursor: pointer; }
     /* Dates and labels, as in the cards (D38). */
     .tn-chip { background: var(--chip); border: 1px solid var(--chip-border); border-radius: 0.8em; padding: 0 0.45em; }
     .tn-date { white-space: nowrap; }

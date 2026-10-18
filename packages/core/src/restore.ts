@@ -16,7 +16,7 @@ export function restorable(set: AnnotationSet | null | undefined): { annotations
   const kept = (deleted: string) => !set.purgedBefore || deleted > set.purgedBefore;
   const annotations = (set.tombstones ?? []).filter((t) => t.annotation && !live.has(t.id) && kept(t.deleted)).map((t) => t.annotation!);
   const den = set.deletedEmailNote;
-  const emailNote = den && kept(den.deleted) && !set.emailNoteMd?.trim() ? den.md : null;
+  const emailNote = den?.md !== undefined && kept(den.deleted) && !set.emailNoteMd?.trim() ? den.md : null;
   return { annotations, emailNote };
 }
 
@@ -28,7 +28,7 @@ export function restorable(set: AnnotationSet | null | undefined): { annotations
 export function purgeDeleted(set: AnnotationSet, now = new Date().toISOString()): AnnotationSet {
   const next: AnnotationSet = { ...set, rev: set.rev + 1, updated: now, purgedBefore: now };
   if (set.tombstones?.length) next.tombstones = set.tombstones.map((t) => ({ id: t.id, deleted: t.deleted }));
-  delete next.deletedEmailNote;
+  if (set.deletedEmailNote) next.deletedEmailNote = { deleted: set.deletedEmailNote.deleted }; // the record stays
   return next;
 }
 

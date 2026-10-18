@@ -5,11 +5,13 @@
 // The task view's list (D38): every checklist item in all notes, grouped by due date. Kept
 // apart from the page so it can be tested without a browser.
 
-import { formatDue, isValidDate, isoDate, preferredSpellings, senderName, tasksIn, type AnnotationSet, type TaskItem, type TextQuoteSelector } from "@thundernotes/core";
+import { codeLines, formatDue, isValidDate, isoDate, preferredSpellings, senderName, tasksIn, type AnnotationSet, type TaskItem, type TextQuoteSelector } from "@thundernotes/core";
 import { EMAIL_NOTE_ID } from "./protocol.js";
 import { matchesFilter, parseFilter } from "./filter-expr.js";
 
 export interface TaskEntry extends TaskItem {
+  /** The account the note is in (D42; Thunderbird's local id). */
+  accountId?: string;
   messageId: string;
   /** The note it is in: an annotation's id, or EMAIL_NOTE_ID. */
   noteId: string;
@@ -46,7 +48,7 @@ export const GROUP_TITLES: Record<GroupKey, string> = {
 };
 
 /** A task's identity across redraws (its email, note and line). */
-export const taskKey = (t: TaskEntry) => `${t.messageId}|${t.noteId}|${t.line}`;
+export const taskKey = (t: TaskEntry) => `${t.accountId ?? ""}|${t.messageId}|${t.noteId}|${t.line}`;
 
 /** "Anna <anna@x.example>" → "anna@x.example"; a bare address as it is. */
 export function addressOf(from: string | undefined): string {
@@ -59,7 +61,7 @@ export function collectTasks(sets: AnnotationSet[]): TaskEntry[] {
   const out: TaskEntry[] = [];
   for (const set of sets) {
     const info = emailInfoOf(set.email);
-    const email = { messageId: set.email.messageId, subject: info.subject, sender: info.name, senderAddress: info.address, emailDate: info.date };
+    const email = { accountId: set.email.accountId, messageId: set.email.messageId, subject: info.subject, sender: info.name, senderAddress: info.address, emailDate: info.date };
     const notes: { noteId: string; md: string; quote?: string }[] = [
       { noteId: EMAIL_NOTE_ID, md: set.emailNoteMd ?? "" },
       ...set.annotations.map((a) => ({
@@ -198,7 +200,7 @@ export interface Section {
   /** Label sections: the label (none for "No label"). */
   label?: string;
   /** Email sections: the email. */
-  email?: { messageId: string; sender: string; senderAddress: string; date?: string };
+  email?: { accountId?: string; messageId: string; sender: string; senderAddress: string; date?: string };
   tasks: TaskEntry[];
 }
 
@@ -229,16 +231,20 @@ export function sections(tasks: TaskEntry[], filter: Filter, labelOrder: string[
     if (none.length) out.push({ id: "label:", title: "No label", kind: "label", tasks: none });
   } else {
     const emails = new Map<string, TaskEntry[]>();
-    for (const t of [...open, ...inline]) emails.set(t.messageId, [...(emails.get(t.messageId) ?? []), t]);
+    // One section per email in an account (D42): the same email in two accounts has notes of its own.
+    for (const t of [...open, ...inline]) {
+      const key = `${t.accountId ?? ""}|${t.messageId}`;
+      emails.set(key, [...(emails.get(key) ?? []), t]);
+    }
     const written = (a: TaskEntry, b: TaskEntry) =>
       (a.noteId === b.noteId ? 0 : a.noteId === EMAIL_NOTE_ID ? -1 : b.noteId === EMAIL_NOTE_ID ? 1 : a.noteId.localeCompare(b.noteId)) || a.line - b.line;
     for (const list of [...emails.values()].sort((a, b) => newestFirst(a[0]!, b[0]!))) {
       const first = list[0]!;
       out.push({
-        id: `email:${first.messageId}`,
+        id: `email:${first.accountId ?? ""}|${first.messageId}`,
         title: first.subject,
         kind: "email",
-        email: { messageId: first.messageId, sender: first.sender, senderAddress: first.senderAddress, date: first.emailDate },
+        email: { accountId: first.accountId, messageId: first.messageId, sender: first.sender, senderAddress: first.senderAddress, date: first.emailDate },
         // Done ones inline in the order written too, so sub-tasks stay under their parents.
         tasks: list.sort(written),
       });
@@ -460,17 +466,10 @@ async function notePart(note: { quote?: string; md: string }, level: string, loo
 export function shiftHeadings(md: string, by: number): string {
   const lines = md.split("\n");
   const out: string[] = [];
-  let fence: string | null = null;
+  const code = codeLines(md); // as the renderer sees code (issues #4, #5)
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const opens = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
-    if (fence) {
-      if (opens && opens[1]!.startsWith(fence)) fence = null;
-      out.push(line);
-      continue;
-    }
-    if (opens) {
-      fence = opens[1]!;
+    if (code.has(i)) {
       out.push(line);
       continue;
     }
@@ -480,7 +479,7 @@ export function shiftHeadings(md: string, by: number): string {
       continue;
     }
     const next = lines[i + 1];
-    const underline = next !== undefined && /^\s{0,3}(=+|-+)\s*$/.exec(next);
+    const underline = next !== undefined && !code.has(i + 1) && /^\s{0,3}(=+|-+)\s*$/.exec(next);
     const paragraphLine = line.trim() && !(lines[i - 1] ?? "").trim() && !/^\s*(?:[-*+>|]|\d+[.)])/.test(line);
     if (underline && paragraphLine) {
       out.push(`${"#".repeat((underline[1]!.startsWith("=") ? 1 : 2) + by)} ${line.trim()}`);

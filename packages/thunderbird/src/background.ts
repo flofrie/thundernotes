@@ -19,10 +19,13 @@ import {
   setTaskDone,
   editTask,
   taskAt,
+  removeLabelFromNote,
   senderName,
   type TaskEdit,
   emailLink,
   labelsIn,
+  looseDates,
+  convertLooseDates,
   preferredSpellings,
   linkedMessageIds,
   messageIdOf,
@@ -38,7 +41,10 @@ import { EMAIL_NOTE_ID, type Backlink, type EmailCandidate, type ContextInfo, ty
 import { deleteSet, getAllSets, getSet, onSetsChanged, putSet } from "./store.js";
 import { addressOf, collectTasks, emailInfoOf, groupOf, noteAsMarkdown, notesAsMarkdown, taskAsMarkdown, type EmailInfo } from "./task-list.js";
 import { setCounters } from "./badges.js";
-import { CARRIER_FOLDER, type LostFolder, deleteUnreadable, setLabelColour, setLabelOrder, isCarrierFolder, syncProblems, syncStatus, isImapAccount, pull, pullAll, schedulePush, setSyncHooks } from "./sync.js";
+import { moveNotes } from "./move.js";
+import { IGNORED_KEY, deletedState, ignoredKey, isIgnored, type Ignored } from "./deleted.js";
+import { accountByAddress } from "./accounts.js";
+import { CARRIER_FOLDER, type LostFolder, getAllSettings, deleteUnreadable, setLabelColour, setLabelOrder, isCarrierFolder, syncProblems, syncStatus, isImapAccount, pull, pullAll, schedulePush, setSyncHooks } from "./sync.js";
 import { TAG_KEY, retagFolders, tagCopies } from "./tags.js";
 
 const SCRIPT_ID = "thundernotes-display";
@@ -89,6 +95,8 @@ async function ensureDisplayScript(): Promise<void> {
   }
 }
 ensureDisplayScript().catch((e) => console.error("ThunderNotes: registering display script failed", e));
+// Label settings per account (D42): made from the shared ones of before at the first start.
+getAllSettings().catch((e) => console.error("ThunderNotes: label settings", e));
 
 // Menus are (re)created whenever the background starts: runtime.onInstalled may not
 // fire when a temporary add-on is reloaded.
@@ -245,10 +253,10 @@ interface Displayed {
   carrier: boolean;
 }
 
-/** A request from an email the tab no longer shows: that email, found by its Message-ID. */
-async function displayedAs(shown: Displayed, messageId: string): Promise<Displayed> {
-  const { messages } = await messenger.messages.query({ headerMessageId: messageId });
-  const header = messages[0];
+/** A request from an email the tab no longer shows: that email in its account (D42), found by its Message-ID. */
+async function displayedAs(shown: Displayed, messageId: string, accountId: string | undefined): Promise<Displayed> {
+  const { messages } = await messenger.messages.query({ headerMessageId: messageId, ...(accountId ? { accountId } : {}) });
+  const header = messages.find((m) => !isCarrierFolder(m.folder));
   if (!header) throw new Error(`ThunderNotes: email ${messageId} not found`);
   return { ...fromHeader(header), tabId: shown.tabId };
 }
@@ -276,7 +284,9 @@ function fromHeader(header: tb.MessageHeader): Omit<Displayed, "tabId"> {
 async function retag(folders: tb.MailFolder[], windowId?: number): Promise<void> {
   if (!folders.length) return;
   const ids = new Set(
-    (await getAllSets()).filter(hasContent).map((s) => s.email.messageId)
+    // Sets that don't know their account yet ("*"): for whichever account has the email; not
+    // those waiting for an account that isn't in Thunderbird (dev issue #4).
+    (await getAllSets()).filter((s) => hasContent(s) && (s.email.accountId || !s.email.account)).map((s) => `${s.email.accountId || "*"}|${s.email.messageId.replace(/^<|>$/g, "")}`)
   );
   let params: URLSearchParams;
   try {
@@ -307,7 +317,7 @@ async function retag(folders: tb.MailFolder[], windowId?: number): Promise<void>
 /** Keeps the `$Annotated` tag in step with the email's annotations; never blocks saving. */
 /** The tag on the displayed email and all its other copies (D2: they share the notes). */
 function tagAnnotated(d: Displayed, on: boolean): void {
-  tagCopies(d.email.messageId, on, CARRIER_FOLDER).catch((e) => console.warn("ThunderNotes: tagging failed", e));
+  tagCopies(d.email.messageId, on, CARRIER_FOLDER, d.email.accountId).catch((e) => console.warn("ThunderNotes: tagging failed", e)); // this account's copies (D42)
 }
 
 function newSet(email: EmailRef, now: string): AnnotationSet {
@@ -333,7 +343,7 @@ type Handler<K extends ToBackground["type"]> = (
 /** Stores a changed set and schedules its sync (D27). */
 async function save(set: AnnotationSet): Promise<void> {
   await putSet(set);
-  schedulePush(set.email.messageId);
+  schedulePush(set.email.accountId, set.email.messageId);
 }
 
 /**
@@ -348,16 +358,22 @@ async function saveEmptied(set: AnnotationSet, d: Displayed): Promise<Annotation
     await save(set);
     return set;
   }
-  await deleteSet(set.email.messageId);
+  await deleteSet(set.email.accountId, set.email.messageId);
   return null;
 }
 
-/** The stored set, with the account filled in for sets made before sync existed. */
+/** The stored set of the shown email in its account (D42); sets made before sync get this account. */
 async function storedSet(d: Displayed): Promise<AnnotationSet | null> {
-  let set = await getSet(d.email.messageId);
-  if (set && !set.email.accountId && d.email.accountId) {
-    set.email = { ...set.email, accountId: d.email.accountId };
-    await save(set);
+  let set = await getSet(d.email.accountId, d.email.messageId);
+  if (!set && d.email.accountId) {
+    const unassigned = await getSet(undefined, d.email.messageId);
+    // Not when imported for another account (dev issue #4): it waits for that one.
+    if (unassigned && (!unassigned.email.account || (await accountByAddress(unassigned.email.account)) === d.email.accountId)) {
+      const { account: _, ...email } = unassigned.email;
+      set = { ...unassigned, email: { ...email, accountId: d.email.accountId } };
+      await putSet(set, "");
+      schedulePush(set.email.accountId, set.email.messageId);
+    }
   }
   // Local accounts: deleted copies expire here (IMAP sets expire in sync, D27).
   if (set && !(await isImapAccount(set.email.accountId))) {
@@ -365,7 +381,7 @@ async function storedSet(d: Displayed): Promise<AnnotationSet | null> {
     if (gced !== set) {
       const deleted = restorable(gced);
       if (!hasContent(gced) && !deleted.annotations.length && deleted.emailNote === null) {
-        await deleteSet(gced.email.messageId);
+        await deleteSet(gced.email.accountId, gced.email.messageId);
         return null;
       }
       await putSet(gced);
@@ -410,7 +426,7 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
     const prefs = await messenger.storage.local.get(["marginCollapsed", "marginWidth"]);
     const marginCollapsed = prefs.marginCollapsed === true;
     const marginWidth = typeof prefs.marginWidth === "number" ? prefs.marginWidth : null;
-    if (d.carrier) return { set: null, debug: false, marginCollapsed: true, marginWidth, carrier: true, folded: [], ref: d.email.messageId };
+    if (d.carrier) return { set: null, debug: false, marginCollapsed: true, marginWidth, carrier: true, folded: [], ref: d.email.messageId, accountId: d.email.accountId };
     const set = await storedSet(d);
     // A tag without notes is stale (e.g. the add-on was removed and its database deleted).
     // The reverse is never "fixed" on display: a tag the user removed stays removed.
@@ -418,7 +434,7 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
     const folded = await foldedIds(set, d.email.messageId);
     const focus = pendingFocus.get(d.email.messageId);
     pendingFocus.delete(d.email.messageId);
-    return { set, debug: await getDebug(), marginCollapsed, marginWidth, carrier: false, folded, ref: d.email.messageId, focus };
+    return { set, debug: await getDebug(), marginCollapsed, marginWidth, carrier: false, folded, ref: d.email.messageId, accountId: d.email.accountId, focus };
   },
 
   async add({ annotation }, d) {
@@ -531,6 +547,11 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
     await navigator.clipboard.writeText(text);
   },
 
+  async convertLooseDate({ md, text, k }) {
+    const match = looseDates(md).filter((d) => md.slice(d.from, d.to) === text)[k];
+    return match ? convertLooseDates(md, [match]) : null;
+  },
+
   async copyMarkdown(request, d) {
     const set = await storedSet(d);
     const email = emailInfoOf(set?.email ?? d.email);
@@ -557,25 +578,27 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
     return true;
   },
 
-  async openLink({ url }) {
+  async openLink({ url }, d) {
     const messageId = messageIdOf(url);
-    if (messageId) await openEmail(messageId);
+    // A link in a note opens the copy in the note's account if there is one (D42).
+    if (messageId) await openEmail(messageId, undefined, d.email.accountId);
     else if (/^(?:https?:|mailto:)/i.test(url)) await messenger.windows.openDefaultBrowser(url);
   },
 
   async backlinks(_request, d) {
-    return backlinksOf(d.email.messageId);
+    return backlinksOf(d.email.messageId, d.email.accountId);
   },
 
   async searchEmails({ query }, d) {
     return searchEmails(query, d.email);
   },
 
-  async labels() {
-    // All notes on this device, most used label first (D38).
+  async labels(_request, d) {
+    // The notes of this email's account on this device (D42), most used label first (D38).
     // One entry per label regardless of case, in its preferred spelling (the most written).
     const occurrences: string[] = [];
     for (const set of await getAllSets()) {
+      if (set.email.accountId !== d.email.accountId) continue;
       for (const md of [set.emailNoteMd ?? "", ...set.annotations.map((a) => a.bodyMd)]) occurrences.push(...labelsIn(md));
     }
     const count = new Map<string, number>();
@@ -584,8 +607,11 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
     return [...count.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([key]) => spelling.get(key)!);
   },
 
-  async setLabelColour({ label, colour }) {
-    await setLabelColour(label, (colour as ColourName | null) ?? null);
+  async setLabelColour({ label, colour }, d) {
+    // In an email: that email's account (D42); one not in an account (local folders) has no
+    // synced label settings, so there's nothing to colour.
+    if (!d.email.accountId) return;
+    await setLabelColour(label, (colour as ColourName | null) ?? null, [d.email.accountId]);
   },
 
   async focusPane() {
@@ -597,7 +623,7 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
   },
 
   async status(request, d) {
-    const status = { ...request, linkedFrom: (await backlinksOf(d.email.messageId)).length };
+    const status = { ...request, linkedFrom: (await backlinksOf(d.email.messageId, d.email.accountId)).length };
     lastStatus.set(d.tabId, status);
     await showStatus(d.tabId, status);
   },
@@ -615,15 +641,36 @@ type FromPages =
   | { type: "syncProblems" }
   | { type: "syncStatus" }
   | { type: "deleteUnreadable"; accountId: string; id: string }
-  | { type: "openEmail"; messageId: string; noteId?: string; line?: number }
+  | { type: "openEmail"; accountId?: string; messageId: string; noteId?: string; line?: number }
   | { type: "openTasks" }
   | { type: "setsChanged" }
-  | { type: "setLabelColour"; label: string; colour: string | null }
-  | { type: "setLabelOrder"; mode: LabelOrderMode; custom?: string[] }
+  | { type: "setLabelColour"; label: string; colour: string | null; accountIds?: string[] }
+  | { type: "setLabelOrder"; mode: LabelOrderMode; custom?: string[]; accountIds?: string[] }
+  | { type: "deleteLabel"; label: string; accountIds?: string[] }
+  | { type: "checkEmails" }
+  | { type: "openOptionsAt"; section: string; key?: string }
+  | { type: "deleteNotesOf"; accountId?: string; messageId: string }
+  | { type: "restoreNotes"; changes: NoteChange[] }
   | TaskEditRequest
   | TaskDone;
 
-type TaskDone = { type: "setTaskDone"; messageId: string; noteId: string; line: number; raw: string; done: boolean };
+type TaskDone = { type: "setTaskDone"; accountId?: string; messageId: string; noteId: string; line: number; raw: string; done: boolean };
+
+/**
+ * The settings in a tab of their own, at a section (D44: from "email not found" to the orphaned
+ * notes): there the page can jump to it (inside the Add-ons Manager it can't scroll). An open one
+ * (it answers "optionsTab") is brought to the front.
+ */
+async function openOptionsAt(section: string, key?: string): Promise<void> {
+  await messenger.storage.local.set({ optionsFocus: { section, key, at: Date.now() } });
+  const open = await messenger.runtime.sendMessage<{ tabId: number; windowId: number } | undefined>({ type: "optionsTab" }).catch(() => undefined);
+  if (open) {
+    await messenger.tabs.update(open.tabId, { active: true });
+    await messenger.windows.update(open.windowId, { focused: true });
+  } else {
+    await messenger.tabs.create({ url: `options.html?tab=1#${section}` });
+  }
+}
 
 /** Opens the task view, or brings it to the front if it is open already (it answers "tasksTab"). */
 async function openTasks(): Promise<void> {
@@ -642,22 +689,56 @@ async function openTasks(): Promise<void> {
 }
 
 /** Ticks or unticks a task in the task view: the note changes as if edited (synced, redrawn). False if it's gone. */
-async function tickTask({ messageId, noteId, line, raw, done }: TaskDone): Promise<boolean> {
-  return !!(await changeNote(messageId, noteId, (md) => setTaskDone(md, { line, raw }, done)));
+async function tickTask({ accountId, messageId, noteId, line, raw, done }: TaskDone): Promise<boolean> {
+  return !!(await changeNote(accountId, messageId, noteId, (md) => setTaskDone(md, { line, raw }, done)));
 }
 
-type TaskEditRequest = { type: "editTask"; messageId: string; noteId: string; line: number; raw: string; edit: TaskEdit };
+type TaskEditRequest = { type: "editTask"; accountId?: string; messageId: string; noteId: string; line: number; raw: string; edit: TaskEdit };
 
 /** A quick change from the task view (D38): the task's lines before and after, for undo; null if it's gone. */
-async function editTaskLine({ messageId, noteId, line, raw, edit }: TaskEditRequest): Promise<{ before: string[]; after: string[] } | null> {
+async function editTaskLine({ accountId, messageId, noteId, line, raw, edit }: TaskEditRequest): Promise<{ before: string[]; after: string[] } | null> {
   let result: ReturnType<typeof editTask> = null;
-  const ok = await changeNote(messageId, noteId, (md) => (result = editTask(md, { line, raw }, edit))?.md ?? null);
+  const ok = await changeNote(accountId, messageId, noteId, (md) => (result = editTask(md, { line, raw }, edit))?.md ?? null);
   return ok && result ? { before: (result as { before: string[] }).before, after: (result as { after: string[] }).after } : null;
 }
 
+/** One note's text before and after a change made everywhere (deleting a label), for undo. */
+type NoteChange = { accountId?: string; messageId: string; noteId: string; before: string; after: string };
+
+/**
+ * A label deleted from the task view: taken out of every note in these accounts (none named: all),
+ * each change an edit like any other (synced, open emails redrawn). Answers what changed, for undo.
+ */
+async function deleteLabel(label: string, accountIds?: string[]): Promise<{ emails: number; changes: NoteChange[] }> {
+  const changes: NoteChange[] = [];
+  const emails = new Set<string>();
+  for (const set of await getAllSets()) {
+    if (!hasContent(set) || (accountIds?.length && !accountIds.includes(set.email.accountId ?? ""))) continue;
+    const notes = [{ noteId: EMAIL_NOTE_ID, md: set.emailNoteMd ?? "" }, ...set.annotations.map((a) => ({ noteId: a.id, md: a.bodyMd }))];
+    for (const { noteId, md } of notes) {
+      const after = removeLabelFromNote(md, label);
+      if (after === md) continue;
+      if (await changeNote(set.email.accountId, set.email.messageId, noteId, (now) => (now === md ? after : null), false)) {
+        changes.push({ accountId: set.email.accountId, messageId: set.email.messageId, noteId, before: md, after });
+        emails.add(`${set.email.accountId}|${set.email.messageId}`);
+      }
+    }
+  }
+  if (changes.length) void refreshOpenMessages();
+  return { emails: emails.size, changes };
+}
+
+/** Undo of deleteLabel: each note back as it was, if it is still as left. */
+async function restoreNotes(changes: NoteChange[]): Promise<number> {
+  let restored = 0;
+  for (const c of changes) if (await changeNote(c.accountId, c.messageId, c.noteId, (now) => (now === c.after ? c.before : null), false)) restored++;
+  if (restored) void refreshOpenMessages();
+  return restored;
+}
+
 /** A note's text changed from the task view, as if edited in the email (D32: time and device; synced, redrawn). */
-async function changeNote(messageId: string, noteId: string, change: (md: string) => string | null): Promise<boolean> {
-  const set = await getSet(messageId);
+async function changeNote(accountId: string | undefined, messageId: string, noteId: string, change: (md: string) => string | null, redraw = true): Promise<boolean> {
+  const set = await getSet(accountId, messageId);
   if (!set) return false;
   const now = new Date().toISOString();
   const by = await deviceName();
@@ -674,7 +755,7 @@ async function changeNote(messageId: string, noteId: string, change: (md: string
     next = touch({ ...set, annotations }, now);
   }
   await save(next);
-  void refreshOpenMessages();
+  if (redraw) void refreshOpenMessages();
   return true;
 }
 
@@ -707,7 +788,8 @@ const tasksSpace: Promise<number | null> = (async () => {
 
 /** The Tasks button (and the space's) shows how many open tasks are overdue (red), nothing when none are. */
 async function countOverdue(): Promise<void> {
-  const overdue = collectTasks(await getAllSets()).filter((t) => groupOf(t) === "overdue").length;
+  const ignored = await readIgnored(); // deleted emails don't count (D43)
+  const overdue = collectTasks((await getAllSets()).filter((s) => !isIgnored(ignored, s))).filter((t) => groupOf(t) === "overdue").length;
   await messenger.action.setBadgeText({ text: overdue ? String(overdue) : null });
   await messenger.action.setBadgeBackgroundColor({ color: "#c92a2a" });
   await messenger.action.setTitle({ title: overdue ? `ThunderNotes Tasks: ${overdue} overdue` : null });
@@ -738,10 +820,13 @@ const pendingFocus = new Map<string, { id: string; line: number }>();
  * here. With `focus` (the task view, D38): that note opens for editing, the cursor on the task's
  * line, either when the email loads or, if it is shown already, right away.
  */
-async function openEmail(messageId: string, focus?: { id: string; line: number }): Promise<void> {
+async function openEmail(messageId: string, focus?: { id: string; line: number }, accountId?: string): Promise<void> {
   let tab: tb.Tab;
+  const headerMessageId = messageId.replace(/^<|>$/g, "");
   try {
-    tab = await messenger.messageDisplay.open({ headerMessageId: messageId.replace(/^<|>$/g, ""), active: true });
+    // The copy in the notes' account (D42), else any.
+    const copy = accountId ? (await messenger.messages.query({ headerMessageId, accountId }).catch(() => null))?.messages[0] : undefined;
+    tab = await messenger.messageDisplay.open(copy ? { messageId: copy.id, active: true } : { headerMessageId, active: true });
   } catch {
     await showNotice({ notice: "emailNotFound", id: messageId });
     return;
@@ -781,8 +866,9 @@ async function searchEmails(query: string, current: EmailRef): Promise<EmailCand
     found.set(id, { ...c, messageId: id, hasNotes: c.hasNotes || !!known?.hasNotes, sameThread: !!conversation && conversationSubject(c.subject) === conversation });
   };
   const withNotes = new Set<string>();
+  const ignored = await readIgnored();
   for (const set of await getAllSets()) {
-    if (!hasContent(set)) continue;
+    if (!hasContent(set) || isIgnored(ignored, set)) continue; // deleted emails aren't offered (D43)
     const id = set.email.messageId.replace(/^<|>$/g, "");
     withNotes.add(id);
     const text = `${set.email.subject ?? ""} ${set.email.from ?? ""}`.toLowerCase();
@@ -812,13 +898,16 @@ async function searchEmails(query: string, current: EmailRef): Promise<EmailCand
 }
 
 /**
- * Backlinks: the emails whose notes link to this one, across all accounts on this device (a
- * Message-ID is the same everywhere). Computed from the stored notes when asked.
+ * Backlinks: the emails whose notes link to this one, among the notes of the same account (D42:
+ * each account its own world). Computed from the stored notes when asked.
  */
-async function backlinksOf(messageId: string): Promise<Backlink[]> {
+async function backlinksOf(messageId: string, accountId: string | undefined): Promise<Backlink[]> {
   const target = messageId.replace(/^<|>$/g, "");
   const out: Backlink[] = [];
+  const ignored = await readIgnored();
   for (const set of await getAllSets()) {
+    if (set.email.accountId !== accountId) continue; // notes in this account only (D42)
+    if (isIgnored(ignored, set)) continue; // a deleted email's notes link from nowhere (D43)
     if (set.email.messageId.replace(/^<|>$/g, "") === target) continue;
     const where: string[] = [];
     if (set.emailNoteMd && linkedMessageIds(set.emailNoteMd).includes(target)) where.push("");
@@ -827,7 +916,7 @@ async function backlinksOf(messageId: string): Promise<Backlink[]> {
       const quote = a.selectors.find((s): s is TextQuoteSelector => s.type === "TextQuoteSelector");
       where.push(quote?.exact ?? "");
     }
-    if (where.length) out.push({ messageId: set.email.messageId, subject: set.email.subject ?? "", from: set.email.from ?? "", date: set.email.date ?? "", quotes: where });
+    if (where.length) out.push({ accountId: set.email.accountId, messageId: set.email.messageId, subject: set.email.subject ?? "", from: set.email.from ?? "", date: set.email.date ?? "", quotes: where });
   }
   return out.sort((a, b) => (a.date < b.date ? 1 : -1));
 }
@@ -857,11 +946,17 @@ messenger.runtime.onMessage.addListener((
 ) => {
   // From the task view (D38), and the popup's link to it.
   if (request?.type === "openTasks") return openTasks();
-  // A label's colour (D40), from an email or the task view (which is a tab too, without an email:
-  // it must not go the way of the email requests below).
-  if (request?.type === "setLabelColour") return setLabelColour(request.label, (request.colour as ColourName | null) ?? null);
+  // A label's colour (D40) from the task view, for the accounts it names (it is a tab too, without
+  // an email: it must not go the way of the email requests below). From an email it does: that
+  // email's account only (D42, dev issue #3).
+  if (request?.type === "setLabelColour" && request.accountIds) return setLabelColour(request.label, (request.colour as ColourName | null) ?? null, request.accountIds);
   // The labels' order, from the task view (D40).
-  if (request?.type === "setLabelOrder") return setLabelOrder(request.mode, request.custom);
+  if (request?.type === "setLabelOrder") return setLabelOrder(request.mode, request.custom, request.accountIds);
+  if (request?.type === "deleteLabel") return deleteLabel(request.label, request.accountIds);
+  if (request?.type === "checkEmails") return scanEmails();
+  if (request?.type === "openOptionsAt") return openOptionsAt(request.section, request.key);
+  if (request?.type === "deleteNotesOf") return deleteNotesOf(request.accountId, request.messageId);
+  if (request?.type === "restoreNotes") return restoreNotes(request.changes);
   if (request?.type === "setTaskDone") return tickTask(request);
   if (request?.type === "editTask") return editTaskLine(request);
   if (request?.type === "setsChanged") return void countOverdueSoon(); // written by another page (an import)
@@ -874,20 +969,21 @@ messenger.runtime.onMessage.addListener((
   if (request?.type === "deleteUnreadable") return deleteUnreadable(request.accountId, request.id);
   // From the popup: open an email that links here (D37).
   if (request?.type === "openEmail") {
-    const { messageId, noteId, line } = request;
-    return openEmail(messageId, noteId !== undefined ? { id: noteId, line: line ?? 0 } : undefined);
+    const { accountId, messageId, noteId, line } = request;
+    return openEmail(messageId, noteId !== undefined ? { id: noteId, line: line ?? 0 } : undefined, accountId);
   }
   const tabId = sender.tab?.id;
   const handler = handlers[request?.type] as Handler<ToBackground["type"]> | undefined;
   if (!handler || tabId === undefined) return undefined;
   const claimed = (request as { ref?: string }).ref;
+  const claimedAccount = (request as { refAccount?: string }).refAccount || undefined;
   return displayed(tabId).then(async (shown) => {
     // Sent for another email than the tab shows now (saved while switching to the next one):
     // it belongs to that email, never to the one shown (D24). Its header button isn't ours.
     let d = shown;
-    if (claimed && claimed !== shown.email.messageId) {
+    if (claimed && (claimed !== shown.email.messageId || (claimedAccount !== undefined && claimedAccount !== shown.email.accountId))) {
       if (request.type === "status") return undefined;
-      d = await displayedAs(shown, claimed);
+      d = await displayedAs(shown, claimed, claimedAccount);
     }
     // Carriers are never annotated (D27).
     if (d.carrier && ["add", "remove", "update", "setEmailNote", "setColour", "setFolded", "restoreDeleted", "purgeDeleted"].includes(request.type)) {
@@ -954,6 +1050,128 @@ function pullSoon(folder: tb.MailFolder): void {
   pullTimers.set(accountId, setTimeout(() => void pull(accountId).catch(() => {}), 1_500)); // recorded for the warning
 }
 messenger.messages.onNewMailReceived.addListener((folder) => pullSoon(folder));
+
+/** All messages of a list, page by page. */
+async function allMessages(list: tb.MessageList): Promise<tb.MessageHeader[]> {
+  const out = [...list.messages];
+  for (let id = list.id; id; ) {
+    const next = await messenger.messages.continueList(id);
+    out.push(...next.messages);
+    id = next.id;
+  }
+  return out;
+}
+
+// An email moved to another account takes its notes along (D42): stored and synced in the new
+// account; the old one keeps only deletion records (so its other devices remove them), unless a
+// copy of the email is still there. Moves within an account change nothing; copies copy no notes.
+messenger.messages.onMoved.addListener((original, moved) => void notesFollow(original, moved).catch((e) => console.error("ThunderNotes: moving notes failed", e)));
+
+// ---- deleted emails are left alone (D43) ------------------------------------------------------------
+
+let ignoredQueue: Promise<unknown> = Promise.resolve();
+/** The emails whose notes are ignored (in the Trash or deleted for good), from storage. */
+async function readIgnored(): Promise<Ignored> {
+  return ((await messenger.storage.local.get(IGNORED_KEY))[IGNORED_KEY] as Ignored | undefined) ?? {};
+}
+
+/** Checks an email with notes: deleted (all copies in the Trash, or gone after a deletion for good) or not. */
+function refreshDeleted(accountId: string | undefined, messageId: string, afterDeletion = false): Promise<void> {
+  const next = ignoredQueue.then(async () => {
+    const id = messageId.replace(/^<|>$/g, "");
+    const key = ignoredKey(accountId, id);
+    const ignored = await readIgnored();
+    const set = accountId ? await getSet(accountId, id) : null;
+    let state: "trash" | "deleted" | "missing" | null = null;
+    if (set && hasContent(set)) {
+      const found = await messenger.messages.query({ headerMessageId: id, accountId }).catch(() => null);
+      if (!found) return; // couldn't look: leave it as it was
+      state = deletedState(found.messages.filter((m) => !isCarrierFolder(m.folder)), afterDeletion);
+    }
+    if ((ignored[key] ?? null) === state) return;
+    if (state) ignored[key] = state;
+    else delete ignored[key];
+    await messenger.storage.local.set({ [IGNORED_KEY]: ignored });
+    countOverdueSoon();
+  });
+  ignoredQueue = next.catch((e) => console.warn("ThunderNotes: checking a deleted email", e));
+  return next;
+}
+
+messenger.messages.onMoved.addListener((original, moved) => {
+  void (async () => {
+    const from = await allMessages(original);
+    const to = await allMessages(moved);
+    for (const [i, o] of from.entries()) {
+      await refreshDeleted(o.folder?.accountId, o.headerMessageId).catch(() => {});
+      const m = to[i];
+      if (m && m.folder?.accountId !== o.folder?.accountId) await refreshDeleted(m.folder?.accountId, m.headerMessageId).catch(() => {});
+    }
+  })();
+});
+messenger.messages.onCopied.addListener((_original, copied) => {
+  void allMessages(copied).then(async (list) => {
+    for (const m of list) await refreshDeleted(m.folder?.accountId, m.headerMessageId).catch(() => {});
+  });
+});
+messenger.messages.onDeleted.addListener((deleted) => {
+  void allMessages(deleted).then(async (list) => {
+    for (const m of list) await refreshDeleted(m.folder?.accountId, m.headerMessageId, true).catch(() => {});
+  });
+});
+/**
+ * Every email with notes checked: in the Trash, deleted, or not found (removed by other means, e.g.
+ * on the server; D43, D44). At startup (a little later) and when the task view opens, at most once a minute.
+ */
+let lastScan = 0;
+async function scanEmails(): Promise<void> {
+  if (Date.now() - lastScan < 60_000) return;
+  lastScan = Date.now();
+  for (const set of await getAllSets()) if (hasContent(set) && set.email.accountId) await refreshDeleted(set.email.accountId, set.email.messageId).catch(() => {});
+}
+setTimeout(() => void scanEmails(), 10_000);
+
+/** All notes on an email deleted (one whose email can't be found, D44): synced, restorable for 30 days. */
+async function deleteNotesOf(accountId: string | undefined, messageId: string): Promise<number> {
+  const set = await getSet(accountId, messageId);
+  if (!set || !hasContent(set)) return 0;
+  const count = set.annotations.length + (set.emailNoteMd ? 1 : 0);
+  let next = set;
+  for (const a of set.annotations) next = deleteAnnotation(next, a.id);
+  if (next.emailNoteMd) next = deleteEmailNote(next);
+  next = { ...next, rev: set.rev + 1, updated: new Date().toISOString() };
+  await save(next);
+  await refreshDeleted(accountId, messageId).catch(() => {}); // no notes: no longer listed
+  return count;
+}
+
+async function notesFollow(original: tb.MessageList, movedList: tb.MessageList): Promise<void> {
+  const from = await allMessages(original);
+  const to = await allMessages(movedList);
+  let changed = false;
+  for (const [i, o] of from.entries()) {
+    const m = to[i];
+    const fromAccount = o.folder?.accountId;
+    const toAccount = m?.folder?.accountId;
+    if (!m || !fromAccount || !toAccount || fromAccount === toAccount || isCarrierFolder(o.folder) || isCarrierFolder(m.folder)) continue;
+    const id = o.headerMessageId.replace(/^<|>$/g, "");
+    const set = await getSet(fromAccount, id);
+    if (!set || !hasContent(set)) continue;
+    const copies = (await messenger.messages.query({ headerMessageId: id, accountId: fromAccount }).catch(() => null))?.messages ?? [];
+    // The moved original may still be listed (IMAP: marked deleted until expunged): not a copy left.
+    const keepOld = copies.some((c) => c.id !== o.id && !isCarrierFolder(c.folder));
+    const { moved, left } = moveNotes(set, toAccount, await getSet(toAccount, id), keepOld);
+    await putSet(moved);
+    schedulePush(toAccount, id);
+    if (left) {
+      await putSet(left);
+      schedulePush(fromAccount, id);
+    }
+    await tagCopies(id, true, CARRIER_FOLDER, toAccount).catch(() => {});
+    changed = true;
+  }
+  if (changed) void refreshOpenMessages();
+}
 messenger.folders.onFolderInfoChanged.addListener((folder) => pullSoon(folder));
 // Deleted by the user: recreate and restore right away (D20).
 messenger.folders.onDeleted.addListener((folder) => {

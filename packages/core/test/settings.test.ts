@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 import { describe, expect, it } from "vitest";
-import { SETTINGS_REF, buildSettingsCarrier, labelColourCss, mergeLabelColours, parseCarrierHeaders, parseSettings, sameLabelColours } from "../src/index.js";
+import { SETTINGS_REF, buildSettingsCarrier, combinedSettings, labelColourCss, mergeLabelColours, parseCarrierHeaders, parseSettings, sameLabelColours, type Settings } from "../src/index.js";
 
 describe("label colours (D40)", () => {
   it("merges per label: the newer choice wins, also 'no colour'", () => {
@@ -42,5 +42,20 @@ describe("label colours (D40)", () => {
     expect(css).toContain('.tn-chip.tn-label[data-label="work"]');
     expect(css).toContain('.cm-tn-chip.cm-tn-label[data-label="work"]');
     expect(css).not.toContain("home");
+  });
+});
+
+describe("label settings per account (D42)", () => {
+  it("combines accounts for a view across them: the first account with a choice wins per label", () => {
+    const work: Settings = { version: 1, labelColours: { urgent: { colour: "red", updated: "2026-10-18T10:00:00Z" } }, labelOrder: { mode: "az", custom: [], updated: "2026-10-18T10:00:00Z" } };
+    const home: Settings = { version: 1, labelColours: { urgent: { colour: "blue", updated: "2026-10-18T11:00:00Z" }, garden: { colour: "green", updated: "2026-10-18T11:00:00Z" } } };
+    const both = combinedSettings({ work, home }, ["home", "work"]);
+    expect(both.labelColours.urgent!.colour).toBe("blue");
+    expect(both.labelColours.garden!.colour).toBe("green");
+    expect(both.labelOrder?.mode).toBe("az"); // home has none: work's
+  });
+
+  it("scopes label colour rules to one account's rows", () => {
+    expect(labelColourCss({ x: { colour: "red", updated: "" } }, '[data-account="a1"]')).toMatch(/^\[data-account="a1"\] \.tn-chip\.tn-label\[data-label="x"\], \[data-account="a1"\] \.cm-tn-chip/);
   });
 });

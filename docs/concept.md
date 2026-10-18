@@ -176,7 +176,8 @@ Each email's notes are one Markdown file: all machine data in YAML front matter,
 
 ```markdown
 ---
-thundernotes: 1
+thundernotes: 2
+body_boundary: 0
 message_id: CAF3xQ9b1k@mail.example.com
 subject: Contract renewal – draft v3
 from: Anna Weber <anna@example.com>
@@ -214,18 +215,23 @@ folded:
 
 General note on the whole email goes here.
 
+<!-- thundernotes:boundary:0 -->
+
 ## “termination period of 6 months” <!-- tn:7f3c9a10-5b2e-4c1d-9a8f-0e6d2c4b1a37 -->
 
 We agreed **3 months** in the call. Push back.
 
 - [ ] Reply to Anna
+
+<!-- thundernotes:boundary:0 -->
 ```
 
 **Front matter fields**
 
 | Field | Meaning | Since |
 | --- | --- | --- |
-| `thundernotes` | Format version, 1 | D25 |
+| `thundernotes` | Format version, 2 (version 1 development files are rejected) | D25 |
+| `body_boundary` | N selects the separator line `<!-- thundernotes:boundary:N -->`, chosen absent from every note | D25 |
 | `message_id`, `subject`, `from`, `date`, `folder_hint` | The email reference; only `message_id` is a key, the rest make the file readable | D2, D25 |
 | `created`, `updated`, `rev` | Set timestamps and revision number | D25 |
 | `annotations[]`: `id`, `quote`, `prefix`, `suffix`, `position`, `created`, `updated` | Anchoring selectors and timestamps per highlight; authoritative for anchoring | D25 |
@@ -237,9 +243,9 @@ We agreed **3 months** in the call. Push back.
 | `deleted_email_note`: `note`, `deleted` | Text of an emptied whole-email note, restorable for 30 days | D33 |
 | `folded`: id → `folded`, `at` | Folded cards, only with the sync-folding setting on | D30 |
 
-**Body rules.** `# Subject`, then the whole-email note, then one `## “quote” <!-- tn:<id> -->` section per highlight that has a note; plain highlights exist only in the front matter. On reading, the marked section is authoritative for note text; headings without a marker belong to the note above; text before the first marked section is the whole-email note; a missing section means an empty note.
+**Body rules.** `# Subject`, then the whole-email note, then one marked heading per highlight with a note. The separator line selected by `body_boundary` precedes every annotation heading and terminates the body. This framing is independent of Markdown: literal headings/comments, indentation and unfinished code blocks stay note text. The writer chooses a separator absent from all notes. A missing annotation frame means an empty note; unknown/duplicate frames and a missing final boundary are errors in carriers; an import repairs them instead (each unplaceable section becomes a note of its own, each repair named). Keep structural boundaries intact when editing. Format 2 deliberately replaces the ambiguous version 1 development format; the add-on doesn't read version 1, and `scripts/migrate-format2/` converts existing carriers and exports once. The local database model is unchanged.
 
-**Export and import.** Without the helper, notes live in IndexedDB. The options page exports a zip of these files, in folders by year and month (`YYYY/MM/YYYY-MM-DD_subject-slug_<hash8>.md`, D5), and imports a zip or single `.md` files. Import merges per annotation id, the newer `updated` wins; equal times with different content mean the file was edited by hand, so the file wins.
+**Export and import.** Without the helper, notes live in IndexedDB. The options page exports a zip of these files, in folders by year and month (`YYYY/MM/YYYY-MM-DD_subject-slug_<hash8>.md`, D5), and imports a zip or single `.md` files. Import merges per annotation id, the newer `updated` wins; equal times with different content mean the file was edited by hand, so the file wins. In a repaired import, each section that couldn't be placed becomes a note of its own (anchored at the quote its heading names, if any), so no newer local note can overwrite it in the merge.
 
 The zip also holds a `settings.json`: the options, label colours and order, the task view's choices and the notes collapsed on this computer, but nothing tied to one computer (device name, column width, sync state, drafts). Importing restores it only when "Also restore settings when importing" is switched on; label colours are then merged label by label, the newer one winning, as in sync.
 

@@ -16,7 +16,7 @@ import { Document, isPair, isScalar, isSeq, parse, visit } from "yaml";
 import { EMAIL_NOTE_KEY, mergeText } from "./conflict.js";
 import type { Annotation, AnnotationSet, EmailRef, FoldState, TextPositionSelector, TextQuoteSelector, Tombstone } from "./index.js";
 
-export const FORMAT_VERSION = 1;
+export const FORMAT_VERSION = 2;
 
 interface FrontAnnotation {
   id: string;
@@ -41,6 +41,7 @@ interface FrontMatter {
   from?: string;
   date?: string;
   folder_hint?: string;
+  account?: string;
   created: string;
   updated: string;
   rev: number;
@@ -51,9 +52,11 @@ interface FrontMatter {
   email_note_base?: string;
   annotations?: FrontAnnotation[];
   tombstones?: Array<{ id: string; deleted: string; note?: string } & Partial<FrontAnnotation>>;
-  deleted_email_note?: { note: string; deleted: string };
+  deleted_email_note?: { note?: string; deleted: string };
   purged_before?: string;
   folded?: Record<string, FoldState>;
+  /** Selects a separator line absent from every note. Sections do not depend on Markdown syntax. */
+  body_boundary: number;
 }
 
 const MARKER = /<!--\s*tn:([^\s>]+)\s*-->/;
@@ -125,8 +128,92 @@ function fromFront(fa: FrontAnnotation, bodyMd: string, created: string): Annota
   return annotation;
 }
 
+const boundaryLine = (index: number) => `<!-- thundernotes:boundary:${index} -->`;
+const noteText = (md: string) => md.replace(/\r\n?/g, "\n").replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, "");
+
+/** A deterministic separator absent from all user text; literal format examples stay literal. */
+function chooseBoundary(texts: string[]): number {
+  const occupied = new Set(texts.flatMap((md) => noteText(md).split("\n")));
+  let index = 0;
+  while (occupied.has(boundaryLine(index))) index++;
+  return index;
+}
+
+/** A section that couldn't be placed (an import): it becomes a note of its own. */
+interface Recovered {
+  id: string;
+  /** The quote its heading names ("" if none); for a duplicate, the note it duplicates (`like`). */
+  quote: string;
+  like?: string;
+  bodyMd: string;
+}
+
+/**
+ * Split protocol frames, not Markdown blocks. A note may contain any headings or unfinished
+ * code. The final separator is required, and malformed/duplicate/unknown sections fail closed;
+ * with `problem` (a file the user may have edited, being imported) nothing is dropped instead:
+ * each section that can't be placed becomes a note of its own, and `problem` hears why. Its own
+ * id (from its text: importing the file again finds the same note) means no merge can overwrite
+ * it with a newer local note, as it could if it were added to another note.
+ */
+function readBody(body: string, boundary: number, ids: Set<string>, problem?: (message: string) => void): { emailNote: string; notes: Map<string, string>; recovered: Recovered[] } {
+  const fail = (message: string) => {
+    if (!problem) throw new FormatError(message);
+    problem(message);
+  };
+  const frames: string[][] = [[]];
+  for (const line of body.split("\n")) {
+    if (line === boundaryLine(boundary)) frames.push([]);
+    else frames[frames.length - 1]!.push(line);
+  }
+  // Text after the last separator (it went missing, or text was added below it): a section of its own.
+  if (frames.length < 2 || frames[frames.length - 1]!.some((line) => line.trim())) fail("missing final body boundary");
+  else frames.pop();
+  const first = noteText(frames.shift()!.join("\n"));
+  const titleEnd = first.indexOf("\n");
+  const title = titleEnd === -1 ? first : first.slice(0, titleEnd);
+  const titled = /^# /.test(title);
+  if (!titled) fail("body title missing");
+  const emailNote = titled && titleEnd !== -1 ? noteText(first.slice(titleEnd + 1)) : "";
+  const notes = new Map<string, string>();
+  const recovered: Recovered[] = [];
+  const recover = (text: string, quote: string, like?: string) => {
+    if (!text) return;
+    let id = `recovered-${hash8(`${like ?? ""}\n${quote}\n${text}`)}`;
+    while (ids.has(id) || recovered.some((r) => r.id === id)) id += "x"; // the same text twice
+    recovered.push({ id, quote, ...(like ? { like } : {}), bodyMd: text });
+  };
+  // A malformed first frame is unplaced text too: putting it in the whole-email note
+  // would let a newer local note discard it during import. Keep its heading, if any.
+  if (!titled) recover(first, "");
+  for (const frame of frames) {
+    const text = noteText(frame.join("\n"));
+    const end = text.indexOf("\n");
+    const heading = end === -1 ? text : text.slice(0, end);
+    const marker = /^##[ \t]/.test(heading) ? MARKER.exec(heading) : null;
+    const id = marker?.[1];
+    const own = end === -1 ? "" : noteText(text.slice(end + 1));
+    if (!id || !ids.has(id)) {
+      fail(id ? `section for an unknown note ${id}: kept as a note of its own` : "section without a note marker: kept as a note of its own");
+      // A marked heading names its quote ("## “…” <!-- tn:x -->"): the note anchors there if it can.
+      // Without a marker, the heading is the user's text and stays in it.
+      if (id) recover(own, heading.replace(MARKER, "").replace(/^##[ \t]+/, "").trim().replace(/^“([\s\S]*)”$/, "$1").replace(/…$/, ""));
+      else recover(text, "");
+      continue;
+    }
+    if (notes.has(id)) {
+      fail(`duplicate annotation section ${id}: kept as a note of its own on the same passage`);
+      recover(own, "", id);
+      continue;
+    }
+    notes.set(id, own);
+  }
+  return { emailNote, notes, recovered };
+}
+
 /** AnnotationSet -> Markdown file content. */
 export function toMarkdown(set: AnnotationSet): string {
+  const boundary = chooseBoundary([set.emailNoteMd ?? "", ...set.annotations.map((a) => a.bodyMd)]);
   const front: FrontMatter = {
     thundernotes: FORMAT_VERSION,
     message_id: set.email.messageId,
@@ -134,6 +221,7 @@ export function toMarkdown(set: AnnotationSet): string {
     ...(set.email.from !== undefined && { from: set.email.from }),
     ...(set.email.date !== undefined && { date: set.email.date }),
     ...(set.email.folderHint !== undefined && { folder_hint: set.email.folderHint }),
+    ...(set.email.account !== undefined && { account: set.email.account }),
     created: set.created,
     updated: set.updated,
     rev: set.rev,
@@ -143,6 +231,7 @@ export function toMarkdown(set: AnnotationSet): string {
     ...(set.emailNoteBy && { email_note_by: set.emailNoteBy }),
     ...(set.emailNoteBase && { email_note_base: set.emailNoteBase }),
     annotations: set.annotations.map(toFront),
+    body_boundary: boundary,
   };
   if (!front.annotations!.length) delete front.annotations;
   // A tombstone keeps a copy of what was deleted (D33): its fields plus the note text.
@@ -153,7 +242,10 @@ export function toMarkdown(set: AnnotationSet): string {
       ...(t.annotation && { ...toFront(t.annotation), id: t.id, ...(t.annotation.bodyMd && { note: t.annotation.bodyMd }) }),
     }));
   }
-  if (set.deletedEmailNote) front.deleted_email_note = { note: set.deletedEmailNote.md, deleted: set.deletedEmailNote.deleted };
+  if (set.deletedEmailNote) {
+    const den = set.deletedEmailNote;
+    front.deleted_email_note = { ...(den.md !== undefined ? { note: den.md } : {}), deleted: den.deleted };
+  }
   if (set.purgedBefore) front.purged_before = set.purgedBefore;
   if (set.folded && Object.keys(set.folded).length) {
     front.folded = Object.fromEntries(Object.entries(set.folded).map(([id, f]) => [id, { folded: f.folded, at: f.at }]));
@@ -167,19 +259,25 @@ export function toMarkdown(set: AnnotationSet): string {
     },
   });
   const yaml = doc.toString({ lineWidth: 0 }).trimEnd();
-  const parts = [`---\n${yaml}\n---`, `# ${set.email.subject?.trim() || "(no subject)"}`];
-  if (set.emailNoteMd?.trim()) parts.push(set.emailNoteMd.trim());
+  const subject = set.email.subject?.replace(/[\r\n]+/g, " ").trim() || "(no subject)";
+  const parts = [`---\n${yaml}\n---`, `# ${subject}`];
+  if (set.emailNoteMd?.trim()) parts.push(noteText(set.emailNoteMd));
   for (const a of set.annotations) {
     if (!a.bodyMd.trim()) continue;
-    parts.push(`## “${headingQuote(quoteOf(a)?.exact ?? "")}” <!-- tn:${a.id} -->\n\n${a.bodyMd.trim()}`);
+    parts.push(boundaryLine(boundary), `## “${headingQuote(quoteOf(a)?.exact ?? "")}” <!-- tn:${a.id} -->\n\n${noteText(a.bodyMd)}`);
   }
+  parts.push(boundaryLine(boundary));
   return `${parts.join("\n\n")}\n`;
 }
 
 export class FormatError extends Error {}
 
-/** Markdown file content -> AnnotationSet. Throws FormatError for files that aren't ours. */
-export function fromMarkdown(text: string): AnnotationSet {
+/**
+ * Markdown file content -> AnnotationSet; FormatError for files that aren't ours. Strict by default (carriers: a damaged one stays
+ * unread, D35). With `onProblem` (an import) a section that can't be placed doesn't fail the
+ * file: its text becomes a note of its own and `onProblem` says what was wrong.
+ */
+export function fromMarkdown(text: string, options: { onProblem?: (message: string) => void } = {}): AnnotationSet {
   const source = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
   const fm = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(source);
   if (!fm) throw new FormatError("no front matter");
@@ -190,26 +288,19 @@ export function fromMarkdown(text: string): AnnotationSet {
     throw new FormatError(`front matter is not valid YAML: ${(e as Error).message}`);
   }
   if (!front || typeof front !== "object" || front.thundernotes === undefined) throw new FormatError("not a ThunderNotes file");
-  if (Number(front.thundernotes) > FORMAT_VERSION) throw new FormatError(`format version ${front.thundernotes} is newer than this add-on`);
+  const version = Number(front.thundernotes);
+  if (version > FORMAT_VERSION) throw new FormatError(`format version ${front.thundernotes} is newer than this add-on`);
+  if (version !== FORMAT_VERSION) throw new FormatError(`unsupported format version ${front.thundernotes}; expected ${FORMAT_VERSION}`);
   if (!front.message_id) throw new FormatError("message_id missing");
-
-  // Body: title line, email note, then marked sections.
-  const notes = new Map<string, string[]>();
-  const emailNote: string[] = [];
-  let current = emailNote;
-  let titleSeen = false;
-  for (const line of source.slice(fm[0].length).split("\n")) {
-    const marker = /^##\s/.test(line) ? MARKER.exec(line) : null;
-    if (marker) {
-      current = [];
-      notes.set(marker[1]!, current);
-    } else if (!titleSeen && /^#\s/.test(line) && current === emailNote && !emailNote.some((l) => l.trim())) {
-      titleSeen = true; // the generated "# Subject" line
-    } else {
-      current.push(line);
-    }
+  if (!Number.isSafeInteger(front.body_boundary) || front.body_boundary < 0) throw new FormatError("body_boundary must be a non-negative safe integer");
+  if (front.annotations !== undefined && !Array.isArray(front.annotations)) throw new FormatError("annotations must be an array");
+  const ids = new Set<string>();
+  for (const [i, fa] of (front.annotations ?? []).entries()) {
+    if (!fa || typeof fa.id !== "string" || !fa.id || /[\s>]/.test(fa.id) || fa.quote === undefined) throw new FormatError(`annotation ${i + 1}: valid id and quote required`);
+    if (ids.has(fa.id)) throw new FormatError(`duplicate annotation id ${fa.id}`);
+    ids.add(fa.id);
   }
-  const joined = (lines: string[]) => lines.join("\n").trim();
+  const { emailNote, notes, recovered } = readBody(source.slice(fm[0].length), front.body_boundary, ids, options.onProblem);
 
   const now = new Date().toISOString();
   const created = time(front.created, now);
@@ -218,11 +309,20 @@ export function fromMarkdown(text: string): AnnotationSet {
   if (front.from !== undefined) email.from = String(front.from);
   if (front.date !== undefined) email.date = time(front.date, "");
   if (front.folder_hint !== undefined) email.folderHint = String(front.folder_hint);
+  if (front.account !== undefined) email.account = String(front.account);
 
-  const annotations: Annotation[] = (front.annotations ?? []).map((fa, i) => {
-    if (!fa || fa.id === undefined || fa.quote === undefined) throw new FormatError(`annotation ${i + 1}: id or quote missing`);
-    return fromFront(fa, joined(notes.get(String(fa.id)) ?? []), created);
-  });
+  const annotations: Annotation[] = (front.annotations ?? []).map((fa) => fromFront(fa, notes.get(fa.id) ?? "", created));
+  for (const r of recovered) {
+    const like = r.like ? annotations.find((a) => a.id === r.like) : undefined;
+    annotations.push({
+      id: r.id,
+      selectors: like ? like.selectors.map((s) => ({ ...s })) : [{ type: "TextQuoteSelector", exact: r.quote }],
+      bodyMd: r.bodyMd,
+      created,
+      updated: time(front.updated, created),
+      ...(like?.colour ? { colour: like.colour } : {}),
+    });
+  }
 
   const set: AnnotationSet = {
     version: 1,
@@ -232,7 +332,7 @@ export function fromMarkdown(text: string): AnnotationSet {
     updated: time(front.updated, created),
     annotations,
   };
-  const emailNoteMd = joined(emailNote);
+  const emailNoteMd = emailNote;
   if (emailNoteMd) set.emailNoteMd = emailNoteMd;
   if (front.email_note_updated !== undefined) set.emailNoteUpdated = time(front.email_note_updated, created);
   if (front.email_note_colour) set.emailNoteColour = String(front.email_note_colour);
@@ -249,8 +349,8 @@ export function fromMarkdown(text: string): AnnotationSet {
       });
   }
   const den = front.deleted_email_note;
-  if (den && typeof den === "object" && den.note !== undefined) {
-    set.deletedEmailNote = { md: String(den.note), deleted: time(den.deleted, created) };
+  if (den && typeof den === "object" && den.deleted !== undefined) {
+    set.deletedEmailNote = { ...(den.note !== undefined && den.note !== null ? { md: String(den.note) } : {}), deleted: time(den.deleted, created) };
   }
   if (front.purged_before !== undefined) set.purgedBefore = time(front.purged_before, created);
   if (front.folded && typeof front.folded === "object") {
@@ -294,7 +394,9 @@ export function fileName(set: AnnotationSet): string {
   const y = String(valid.getUTCFullYear());
   const m = String(valid.getUTCMonth() + 1).padStart(2, "0");
   const d = String(valid.getUTCDate()).padStart(2, "0");
-  return `${y}/${m}/${y}-${m}-${d}_${slug(set.email.subject ?? "")}_${hash8(set.email.messageId)}.md`;
+  // With the account (D42): the same email's notes in two accounts are two files.
+  const id = set.email.account ? `${set.email.messageId}\n${set.email.account}` : set.email.messageId;
+  return `${y}/${m}/${y}-${m}-${d}_${slug(set.email.subject ?? "")}_${hash8(id)}.md`;
 }
 
 // ---- merge ------------------------------------------------------------------------------
@@ -377,11 +479,12 @@ interface NoteText {
 
 /**
  * A note's text from two versions (D32): a three-way merge against the base the incoming
- * version names, looked up in this device's sync history. Without a known base: equal
- * times with different text mean a file edited by hand (editors don't touch the
- * timestamps), which wins and is stamped `now`; an incoming text we already synced is stale. With no base found: in sync,
- * lines both have are kept and the rest becomes a conflict box (nothing is lost); on import
- * (a backup or an edited file) the newer text wins, as before (D25).
+ * version names, looked up in this device's sync history. Without a known base: on import,
+ * equal times with different text mean a file edited by hand (editors don't touch the
+ * timestamps), which wins and is stamped `now`; an incoming text we already synced is stale.
+ * With no base found: in sync, lines both have are kept and the rest becomes a conflict box
+ * (nothing is lost; also with equal times, which in sync mean two edits, not a hand-edited file,
+ * design review, issue #1); on import (a backup or an edited file) the newer text wins (D25).
  */
 function mergeNoteText(
   history: string[],
@@ -396,7 +499,7 @@ function mergeNoteText(
   if (theirs.base !== undefined) {
     base = hash8(mine.text) === theirs.base ? mine.text : history.find((t) => hash8(t) === theirs.base);
   }
-  if (base === undefined && mine.at === theirs.at) return { text: theirs.text, at: now, by: theirs.by, conflict: false };
+  if (base === undefined && mine.at === theirs.at && mode === "import") return { text: theirs.text, at: now, by: theirs.by, conflict: false };
   if (base === undefined && history.includes(theirs.text)) return { ...mine, conflict: false };
   if (base === undefined && mode === "import") return { ...newer, conflict: false };
   const merged = mergeText(base, mine, theirs);
@@ -551,7 +654,8 @@ export function mergeSets(
   if (tombstones.length) set.tombstones = tombstones;
   else delete set.tombstones;
   const den = [local.deletedEmailNote, incoming.deletedEmailNote].filter((d) => !!d).sort((x, y) => (x!.deleted < y!.deleted ? 1 : -1))[0];
-  if (den && !(purgedBefore && den.deleted <= purgedBefore)) set.deletedEmailNote = den;
+  // Purged: the copy goes, the record of the deletion stays.
+  if (den) set.deletedEmailNote = purgedBefore && den.deleted <= purgedBefore ? { deleted: den.deleted } : den;
   else delete set.deletedEmailNote;
   if (purgedBefore) set.purgedBefore = purgedBefore;
   else delete set.purgedBefore;
@@ -599,19 +703,34 @@ export function rememberSynced(set: AnnotationSet, uploaded: AnnotationSet): Ann
   return { ...set, syncHistory: history };
 }
 
-/** Tombstones are kept this long, then dropped (D7). */
+/** Deleted notes stay restorable this long (D33): the copy in the tombstone, then it goes (D7). */
 export const TOMBSTONE_DAYS = 30;
+/** The bare record of a deletion stays this long (design review, issue #1), then it goes too. */
+export const DELETION_RECORD_DAYS = 365;
 
-/** Drops tombstones older than TOMBSTONE_DAYS. Returns the same object if nothing changed. */
+/**
+ * Ages deletion records: copies older than TOMBSTONE_DAYS are dropped (no longer restorable),
+ * the records themselves after DELETION_RECORD_DAYS. Returns the same object if nothing changed.
+ */
 export function gcTombstones(set: AnnotationSet, now = new Date().toISOString()): AnnotationSet {
-  const cutoff = new Date(Date.parse(now) - TOMBSTONE_DAYS * 86_400_000).toISOString();
-  const oldNote = !!set.deletedEmailNote && set.deletedEmailNote.deleted <= cutoff;
-  if (!set.tombstones?.length && !oldNote) return set;
-  const kept = (set.tombstones ?? []).filter((t) => t.deleted > cutoff);
-  if (kept.length === (set.tombstones?.length ?? 0) && !oldNote) return set;
-  const next: AnnotationSet = { ...set, tombstones: kept };
-  if (!kept.length) delete next.tombstones;
-  if (oldNote) delete next.deletedEmailNote;
+  const ago = (days: number) => new Date(Date.parse(now) - days * 86_400_000).toISOString();
+  const copyCutoff = ago(TOMBSTONE_DAYS);
+  const recordCutoff = ago(DELETION_RECORD_DAYS);
+  if (!set.tombstones?.length && !set.deletedEmailNote) return set;
+  let changed = false;
+  const tombstones = (set.tombstones ?? []).flatMap((t): Tombstone[] => {
+    if (t.deleted <= recordCutoff) return (changed = true), [];
+    if (t.annotation && t.deleted <= copyCutoff) return (changed = true), [{ id: t.id, deleted: t.deleted }];
+    return [t];
+  });
+  let den = set.deletedEmailNote;
+  if (den && den.deleted <= recordCutoff) (den = undefined), (changed = true);
+  else if (den && den.md !== undefined && den.deleted <= copyCutoff) (den = { deleted: den.deleted }), (changed = true);
+  if (!changed) return set;
+  const next: AnnotationSet = { ...set, tombstones };
+  if (!tombstones.length) delete next.tombstones;
+  if (den) next.deletedEmailNote = den;
+  else delete next.deletedEmailNote;
   return next;
 }
 

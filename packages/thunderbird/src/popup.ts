@@ -114,7 +114,7 @@ async function main(): Promise<void> {
       li.append(subject, meta);
       li.title = "Open this email";
       li.addEventListener("click", () => {
-        messenger.runtime.sendMessage({ type: "openEmail", messageId: b.messageId }).finally(() => window.close());
+        messenger.runtime.sendMessage({ type: "openEmail", accountId: b.accountId, messageId: b.messageId }).finally(() => window.close());
       });
       links.append(li);
     }
@@ -134,13 +134,21 @@ async function main(): Promise<void> {
     purge.textContent = "Delete for good";
     purge.title = "Deletes these copies for good, on all your devices; they can't be restored afterwards";
     let armed = false;
+    let disarm = 0;
     purge.addEventListener("click", () => {
       if (!armed) {
         armed = true;
         purge.textContent = `Click again to delete ${state.restorable} for good`;
         purge.classList.add("armed");
+        // Not clicked again within 4 seconds: back as it was.
+        disarm = window.setTimeout(() => {
+          armed = false;
+          purge.textContent = "Delete for good";
+          purge.classList.remove("armed");
+        }, 4000);
         return;
       }
+      clearTimeout(disarm);
       go({ type: "purgeDeleted" })();
     });
     const bar = document.createElement("div");
@@ -234,12 +242,21 @@ function showSyncWarning(open = false): void {
           name.textContent = `“${item.subject}”`;
           const del = document.createElement("button");
           del.textContent = "Delete from the server";
+          let disarm = 0;
           del.addEventListener("click", () => {
             if (!del.dataset.armed) {
               del.dataset.armed = "1";
+              del.classList.add("armed");
               del.textContent = "Click again to delete";
+              // Not clicked again within 4 seconds: back as it was.
+              disarm = window.setTimeout(() => {
+                delete del.dataset.armed;
+                del.classList.remove("armed");
+                del.textContent = "Delete from the server";
+              }, 4000);
               return;
             }
+            clearTimeout(disarm);
             del.disabled = true;
             messenger.runtime
               .sendMessage({ type: "deleteUnreadable", accountId: p.accountId, id: item.id })

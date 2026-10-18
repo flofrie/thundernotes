@@ -41,12 +41,15 @@ function markdownOf(eml: string): string {
   return new TextDecoder().decode(Uint8Array.from(atob(body), (c) => c.charCodeAt(0)));
 }
 
+/** The add-on's version on all simulated devices (unreadable carriers are read again after an update). */
+const addon = { version: "1.0.0" };
+
 function makeMessenger(server: Server) {
   const storage = new Map<string, unknown>();
   const stats = { imports: 0, expunges: 0, prepared: 0 };
   const find = (id: number) => server.messages.find((m) => m.id === id)!;
   const messenger = {
-    runtime: { getBrowserInfo: async () => ({ name: "Thunderbird", version: "157.0" }) },
+    runtime: { getBrowserInfo: async () => ({ name: "Thunderbird", version: "157.0" }), getManifest: () => ({ version: addon.version }) },
     storage: {
       local: {
         get: async (keys: string | string[]) =>
@@ -119,11 +122,16 @@ function makeMessenger(server: Server) {
 async function device(server: Server) {
   vi.resetModules();
   vi.doMock("../src/store.js", () => {
+    // Keyed by account and Message-ID, as the real store (D42).
     const sets = new Map<string, AnnotationSet>();
+    const key = (accountId: string | undefined, id: string) => `${accountId ?? ""}\u001f${id.replace(/^<|>$/g, "")}`;
     return {
-      getSet: async (id: string) => structuredClone(sets.get(id) ?? null),
-      putSet: async (set: AnnotationSet) => void sets.set(set.email.messageId, structuredClone(set)),
-      deleteSet: async (id: string) => void sets.delete(id),
+      getSet: async (accountId: string | undefined, id: string) => structuredClone(sets.get(key(accountId, id)) ?? null),
+      putSet: async (set: AnnotationSet, from?: string) => {
+        sets.set(key(set.email.accountId, set.email.messageId), structuredClone(set));
+        if (from !== undefined && from !== (set.email.accountId ?? "")) sets.delete(key(from, set.email.messageId));
+      },
+      deleteSet: async (accountId: string | undefined, id: string) => void sets.delete(key(accountId, id)),
       getAllSets: async () => [...sets.values()].map((s) => structuredClone(s)),
     };
   });
@@ -173,55 +181,55 @@ describe("IMAP sync between two devices", () => {
     // A creates a note: one carrier on the server.
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-15T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     expect(server.messages).toHaveLength(1);
 
     // B pulls it, without writing anything back.
     await B.act(() => B.sync.pull(ACCOUNT));
-    expect(notes(await B.store.getSet(REF))).toEqual(["a1:first note"]);
+    expect(notes(await B.store.getSet(ACCOUNT, REF))).toEqual(["a1:first note"]);
     expect(B.stats.imports).toBe(0);
 
     // B adds a note: still one carrier (the old revision is deleted), A gets it.
     await B.act(async () => {
-      const set = (await B.store.getSet(REF))!;
+      const set = (await B.store.getSet(ACCOUNT, REF))!;
       const at = "2026-10-15T10:05:00.000Z";
       await B.store.putSet({ ...set, rev: set.rev + 1, updated: at, annotations: [...set.annotations, annotation("a2", "from B", at)] });
-      B.sync.schedulePush(REF);
+      B.sync.schedulePush(ACCOUNT, REF);
     });
     expect(server.messages).toHaveLength(1);
     await A.act(() => A.sync.pull(ACCOUNT));
-    expect(notes(await A.store.getSet(REF))).toEqual(["a1:first note", "a2:from B"]);
+    expect(notes(await A.store.getSet(ACCOUNT, REF))).toEqual(["a1:first note", "a2:from B"]);
     expect(A.stats.imports).toBe(1); // no echo
 
     // Concurrent: A edits a1 and B adds a3, both before syncing; both end up with both changes.
     await A.act(async () => {
-      const set = (await A.store.getSet(REF))!;
+      const set = (await A.store.getSet(ACCOUNT, REF))!;
       const at = "2026-10-15T11:00:00.000Z";
       await A.store.putSet({ ...set, rev: set.rev + 1, updated: at, annotations: set.annotations.map((a) => (a.id === "a1" ? { ...a, bodyMd: "edited on A", updated: at } : a)) });
     });
     await B.act(async () => {
-      const set = (await B.store.getSet(REF))!;
+      const set = (await B.store.getSet(ACCOUNT, REF))!;
       const at = "2026-10-15T11:01:00.000Z";
       await B.store.putSet({ ...set, rev: set.rev + 1, updated: at, annotations: [...set.annotations, annotation("a3", "also from B", at)] });
-      B.sync.schedulePush(REF);
+      B.sync.schedulePush(ACCOUNT, REF);
     });
-    await A.act(async () => A.sync.schedulePush(REF)); // merges B's carrier before writing
+    await A.act(async () => A.sync.schedulePush(ACCOUNT, REF)); // merges B's carrier before writing
     await B.act(() => B.sync.pull(ACCOUNT));
     const expected = ["a1:edited on A", "a2:from B", "a3:also from B"];
-    expect(notes(await A.store.getSet(REF))).toEqual(expected);
-    expect(notes(await B.store.getSet(REF))).toEqual(expected);
+    expect(notes(await A.store.getSet(ACCOUNT, REF))).toEqual(expected);
+    expect(notes(await B.store.getSet(ACCOUNT, REF))).toEqual(expected);
     expect(server.messages).toHaveLength(1);
 
     // A deletes a2: B loses it too, and doesn't resurrect it.
     await A.act(async () => {
-      await A.store.putSet(deleteAnnotation((await A.store.getSet(REF))!, "a2", "2026-10-15T12:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      await A.store.putSet(deleteAnnotation((await A.store.getSet(ACCOUNT, REF))!, "a2", "2026-10-15T12:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     await B.act(() => B.sync.pull(ACCOUNT));
-    expect(notes(await B.store.getSet(REF))).toEqual(["a1:edited on A", "a3:also from B"]);
+    expect(notes(await B.store.getSet(ACCOUNT, REF))).toEqual(["a1:edited on A", "a3:also from B"]);
     await A.act(() => A.sync.pull(ACCOUNT));
-    expect(notes(await A.store.getSet(REF))).toEqual(["a1:edited on A", "a3:also from B"]);
+    expect(notes(await A.store.getSet(ACCOUNT, REF))).toEqual(["a1:edited on A", "a3:also from B"]);
   });
 
   it("combines edits of the same note from two devices; a line changed on both becomes a conflict box", async () => {
@@ -233,7 +241,7 @@ describe("IMAP sync between two devices", () => {
       const set = initialSet("2026-10-17T09:00:00.000Z");
       set.annotations[0]!.bodyMd = text;
       await A.store.putSet(set);
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     await B.act(() => B.sync.pull(ACCOUNT));
     const edit = (body: string, at: string, by: string) => (set: AnnotationSet): AnnotationSet => ({
@@ -244,16 +252,16 @@ describe("IMAP sync between two devices", () => {
     });
     // Both edit offline: A line one and three, B line three differently.
     await A.act(async () => {
-      await A.store.putSet(edit("ONE\ntwo\nthree (A)", "2026-10-17T09:10:00.000Z", "MacBook")((await A.store.getSet(REF))!));
+      await A.store.putSet(edit("ONE\ntwo\nthree (A)", "2026-10-17T09:10:00.000Z", "MacBook")((await A.store.getSet(ACCOUNT, REF))!));
     });
     await B.act(async () => {
-      await B.store.putSet(edit("one\ntwo\nthree (B)", "2026-10-17T09:12:00.000Z", "Work laptop")((await B.store.getSet(REF))!));
-      B.sync.schedulePush(REF);
+      await B.store.putSet(edit("one\ntwo\nthree (B)", "2026-10-17T09:12:00.000Z", "Work laptop")((await B.store.getSet(ACCOUNT, REF))!));
+      B.sync.schedulePush(ACCOUNT, REF);
     });
-    await A.act(async () => A.sync.schedulePush(REF)); // merges B's carrier first
+    await A.act(async () => A.sync.schedulePush(ACCOUNT, REF)); // merges B's carrier first
     await B.act(() => B.sync.pull(ACCOUNT));
-    const a = (await A.store.getSet(REF))!.annotations[0]!.bodyMd;
-    const b = (await B.store.getSet(REF))!.annotations[0]!.bodyMd;
+    const a = (await A.store.getSet(ACCOUNT, REF))!.annotations[0]!.bodyMd;
+    const b = (await B.store.getSet(ACCOUNT, REF))!.annotations[0]!.bodyMd;
     expect(a).toBe(b);
     expect(a.startsWith("ONE\ntwo\n")).toBe(true);
     expect(hasConflict(a)).toBe(true);
@@ -268,27 +276,56 @@ describe("IMAP sync between two devices", () => {
     expect(A.stats.imports + B.stats.imports).toBe(imports);
   });
 
-  it("removes the carrier once everything is deleted and the tombstones expire", async () => {
+  it("removes the carrier once everything is deleted and the deletion records expire after a year", async () => {
     const server = makeServer();
     const A = await device(server);
     const B = await device(server);
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-15T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     await A.act(async () => {
-      await A.store.putSet(deleteAnnotation((await A.store.getSet(REF))!, "a1", "2026-10-15T10:10:00.000Z"));
-      A.sync.schedulePush(REF);
+      await A.store.putSet(deleteAnnotation((await A.store.getSet(ACCOUNT, REF))!, "a1", "2026-10-15T10:10:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     expect(server.messages).toHaveLength(1); // the tombstone travels in the carrier
     await B.act(() => B.sync.pull(ACCOUNT));
-    expect(notes(await B.store.getSet(REF))).toEqual([]);
+    expect(notes(await B.store.getSet(ACCOUNT, REF))).toEqual([]);
 
     vi.useFakeTimers({ toFake: ["Date"] });
+    // After 30 days the copy is gone (not restorable), the record of the deletion stays.
     vi.setSystemTime(new Date("2026-11-20T00:00:00.000Z"));
     await A.act(() => A.sync.pull(ACCOUNT));
+    expect(server.messages.filter((m) => !m.deleted)).toHaveLength(1);
+    expect((await A.store.getSet(ACCOUNT, REF))?.tombstones).toEqual([{ id: "a1", deleted: "2026-10-15T10:10:00.000Z" }]);
+    // After a year it goes too, and with it the carrier.
+    vi.setSystemTime(new Date("2027-11-20T00:00:00.000Z"));
+    await A.act(() => A.sync.pull(ACCOUNT));
     expect(server.messages).toHaveLength(0);
-    expect(await A.store.getSet(REF)).toBeNull();
+    expect(await A.store.getSet(ACCOUNT, REF)).toBeNull();
+  });
+
+  // Design review (issue #1): a device away longer than the 30 days must not bring deleted notes back.
+  it("doesn't let a device that was away for 40 days bring a deleted note back", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const B = await device(server);
+    await A.act(async () => {
+      await A.store.putSet(initialSet("2026-10-15T10:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    await B.act(() => B.sync.pull(ACCOUNT)); // B has the note, then goes away
+    await A.act(async () => {
+      await A.store.putSet(deleteAnnotation((await A.store.getSet(ACCOUNT, REF))!, "a1", "2026-10-15T10:10:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-25T00:00:00.000Z"));
+    await A.act(() => A.sync.pull(ACCOUNT)); // the copy expires on A
+    await B.act(() => B.sync.pull(ACCOUNT)); // B is back
+    expect(notes(await B.store.getSet(ACCOUNT, REF))).toEqual([]);
+    await A.act(() => A.sync.pull(ACCOUNT));
+    expect(notes(await A.store.getSet(ACCOUNT, REF))).toEqual([]);
   });
 
   // Seen on the real server: "delete permanently" only flagged old revisions \Deleted, they
@@ -298,12 +335,12 @@ describe("IMAP sync between two devices", () => {
     const A = await device(server);
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-15T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     await A.act(async () => {
-      const set = (await A.store.getSet(REF))!;
+      const set = (await A.store.getSet(ACCOUNT, REF))!;
       await A.store.putSet({ ...set, rev: set.rev + 1, updated: "2026-10-15T10:01:00.000Z" });
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     expect(A.stats.imports).toBe(2);
     // Expunge fails silently on this server: the old revision stays listed, flagged.
@@ -321,7 +358,7 @@ describe("IMAP sync between two devices", () => {
     A.sync.setSyncHooks({ changed() {}, folderRestored: (_name, where) => void notices.push(where) });
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-15T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     // Renamed elsewhere: ThunderNotes is gone; its carriers turn up in "Old notes".
     const old = server.messages.map((m) => ({ ...m }));
@@ -345,7 +382,7 @@ describe("IMAP sync between two devices", () => {
     A.sync.setSyncHooks({ changed() {}, folderRestored() {}, problemsChanged: (p) => void seen.push(p) });
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     // The folder becomes invisible (unsubscribed) and the server refuses to create it again.
     server.folderExists = false;
@@ -371,16 +408,16 @@ describe("IMAP sync between two devices", () => {
     const A = await device(server);
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     A.messenger.messages.import = async () => {
       throw new Error("Error importing message: Aborted with status: 2152398878"); // unknown host
     };
     for (let i = 0; i < 3; i++) {
       await A.act(async () => {
-        const set = (await A.store.getSet(REF))!;
+        const set = (await A.store.getSet(ACCOUNT, REF))!;
         await A.store.putSet({ ...set, rev: set.rev + 1 });
-        A.sync.schedulePush(REF);
+        A.sync.schedulePush(ACCOUNT, REF);
       }).catch(() => {});
     }
     expect(await A.act(() => A.sync.syncProblems())).toEqual([]);
@@ -392,7 +429,7 @@ describe("IMAP sync between two devices", () => {
     const B = await device(server);
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     B.messenger.messages.getAttachmentFile = async () => ({ text: async () => "not a ThunderNotes file" }) as unknown as File;
     await B.act(() => B.sync.pull(ACCOUNT).catch(() => {}));
@@ -408,6 +445,147 @@ describe("IMAP sync between two devices", () => {
     expect(await B.act(() => B.sync.syncProblems())).toEqual([]);
   });
 
+  // Design review (issue #1): unreadable carriers may hold notes nobody else has; never cleaned up.
+  const NEWER = "---\nthundernotes: 99\nmessage_id: original@example.com\n---\n# from a newer ThunderNotes\n";
+
+  it("keeps a carrier it can't read when uploading its own notes for the same email", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const B = await device(server);
+    await A.act(async () => {
+      await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    const fromA = server.messages[0]!.id;
+    // B runs an older ThunderNotes: A's carrier is in a format it doesn't know.
+    B.messenger.messages.getAttachmentFile = async () => ({ text: async () => NEWER }) as unknown as File;
+    await B.act(async () => {
+      await B.store.putSet({ ...initialSet("2026-10-17T11:00:00.000Z"), annotations: [annotation("b1", "note from B", "2026-10-17T11:00:00.000Z")] });
+      await B.sync.pull(ACCOUNT).catch(() => {});
+      B.sync.schedulePush(ACCOUNT, REF);
+    });
+    expect(server.messages.find((m) => m.id === fromA)?.deleted).toBeFalsy(); // not removed as an old revision
+    expect(server.messages.filter((m) => !m.deleted)).toHaveLength(2);
+    expect((await B.act(() => B.sync.syncProblems())).map((p) => p.kind)).toEqual(["read"]);
+    // A (which can read both) merges B's note and keeps its own: nothing lost.
+    await A.act(() => A.sync.pull(ACCOUNT));
+    expect(notes(await A.act(() => A.store.getSet(ACCOUNT, REF)))).toEqual(["a1:first note", "b1:note from B"]);
+  });
+
+  // Dev issue #1: a read that failed because of the connection must not let the next upload
+  // delete the unread carrier (its notes were merged nowhere).
+  it("keeps a carrier it couldn't read for a connection problem when uploading its own notes", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const B = await device(server);
+    await A.act(async () => {
+      await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    const remote = server.messages[0]!;
+    const read = B.messenger.messages.getAttachmentFile;
+    B.messenger.messages.getAttachmentFile = async () => {
+      throw Error("NS_ERROR_NET_TIMEOUT");
+    };
+    await B.act(async () => {
+      await B.store.putSet({ ...initialSet("2026-10-17T11:00:00.000Z"), annotations: [annotation("b1", "B only", "2026-10-17T11:00:00.000Z")] });
+      B.sync.schedulePush(ACCOUNT, REF);
+    }).catch(() => {});
+    expect(server.messages.some((m) => m.headerMessageId === remote.headerMessageId && !m.deleted)).toBe(true);
+    // Connection back: both notes end up together, then the extra carrier goes.
+    B.messenger.messages.getAttachmentFile = read;
+    await B.act(() => B.sync.pull(ACCOUNT));
+    expect(notes(await B.act(() => B.store.getSet(ACCOUNT, REF)))).toEqual(["a1:first note", "b1:B only"]);
+    await A.act(() => A.sync.pull(ACCOUNT));
+    expect(notes(await A.act(() => A.store.getSet(ACCOUNT, REF)))).toEqual(["a1:first note", "b1:B only"]);
+  });
+
+  it("doesn't merge a carrier whose notes are for another email", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const B = await device(server);
+    await A.act(async () => {
+      await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    const real = B.messenger.messages.getAttachmentFile;
+    B.messenger.messages.getAttachmentFile = async (id: number) => ({ text: async () => (await (await real(id)).text()).replace(`message_id: ${REF}`, "message_id: other@example.com") }) as unknown as File;
+    await B.act(() => B.sync.pull(ACCOUNT).catch(() => {}));
+    expect(await B.act(() => B.store.getSet(ACCOUNT, REF))).toBeNull();
+    expect(await B.act(() => B.store.getSet(ACCOUNT, "other@example.com"))).toBeNull();
+    const [problem] = await B.act(() => B.sync.syncProblems());
+    expect(problem?.message).toMatch(/for another email/);
+  });
+
+  it("reads an unreadable carrier again after the add-on was updated", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const B = await device(server);
+    await A.act(async () => {
+      await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    const real = B.messenger.messages.getAttachmentFile;
+    B.messenger.messages.getAttachmentFile = async () => ({ text: async () => NEWER }) as unknown as File;
+    await B.act(() => B.sync.pull(ACCOUNT).catch(() => {}));
+    expect(await B.act(() => B.store.getSet(ACCOUNT, REF))).toBeNull();
+    // Updated: it understands the format now.
+    B.messenger.messages.getAttachmentFile = real;
+    addon.version = "1.1.0";
+    try {
+      await B.act(() => B.sync.pull(ACCOUNT));
+      expect(notes(await B.act(() => B.store.getSet(ACCOUNT, REF)))).toEqual(["a1:first note"]);
+      expect(await B.act(() => B.sync.syncProblems())).toEqual([]);
+    } finally {
+      addon.version = "1.0.0";
+    }
+  });
+
+  it("loses nothing when removing the old revision fails after the upload", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    await A.act(async () => {
+      await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    const remove = A.messenger.messages.delete;
+    A.messenger.messages.delete = async () => {
+      throw new Error("server refused");
+    };
+    await A.act(async () => {
+      const set = (await A.store.getSet(ACCOUNT, REF))!;
+      await A.store.putSet({ ...set, rev: set.rev + 1, annotations: [annotation("a1", "edited", "2026-10-17T12:00:00.000Z")] });
+      A.sync.schedulePush(ACCOUNT, REF);
+    }).catch(() => {});
+    expect(server.messages.filter((m) => !m.deleted)).toHaveLength(2); // a duplicate for now, recorded
+    A.messenger.messages.delete = remove;
+    await A.act(() => A.sync.pull(ACCOUNT));
+    expect(server.messages.filter((m) => !m.deleted)).toHaveLength(1);
+    const B = await device(server);
+    await B.act(() => B.sync.pull(ACCOUNT));
+    expect(notes(await B.act(() => B.store.getSet(ACCOUNT, REF)))).toEqual(["a1:edited"]);
+  });
+
+  // D42: the same email in two accounts has two sets of notes; syncing one never touches the other.
+  it("keeps the same email's notes in another account apart while syncing", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const B = await device(server);
+    await A.act(async () => {
+      await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    const privateCopy = { ...initialSet("2026-10-17T09:00:00.000Z"), email: { messageId: REF, subject: "Test", accountId: "private" }, annotations: [annotation("p1", "private note", "2026-10-17T09:00:00.000Z")] };
+    await B.act(async () => {
+      await B.store.putSet(privateCopy);
+      await B.sync.pull(ACCOUNT);
+    });
+    expect(notes(await B.act(() => B.store.getSet(ACCOUNT, REF)))).toEqual(["a1:first note"]);
+    expect(notes(await B.act(() => B.store.getSet("private", REF)))).toEqual(["p1:private note"]);
+    // Nothing of the private notes went to this account's folder.
+    expect(server.messages.map((m) => markdownOf(m.eml)).join()).not.toContain("private note");
+  });
+
   it("subscribes an unsubscribed carrier folder again instead of creating a new one (D36)", async () => {
     const server = makeServer();
     const A = await device(server);
@@ -415,7 +593,7 @@ describe("IMAP sync between two devices", () => {
     A.sync.setSyncHooks({ changed() {}, folderRestored: () => void notices.push("restored"), folderResubscribed: () => void notices.push("resubscribed"), problemsChanged() {} });
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     // Unsubscribed: hidden from add-ons, still on the server.
     server.folderExists = false;
@@ -437,17 +615,17 @@ describe("IMAP sync between two devices", () => {
     const B = await device(server);
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     const getFull = B.messenger.messages.getFull;
     B.messenger.messages.getFull = async () => {
       throw new Error("not downloaded yet");
     };
     await B.act(() => B.sync.pull(ACCOUNT));
-    expect(await B.store.getSet(REF)).toBeNull();
+    expect(await B.store.getSet(ACCOUNT, REF)).toBeNull();
     B.messenger.messages.getFull = getFull;
     await B.act(() => B.sync.pull(ACCOUNT));
-    expect(notes(await B.store.getSet(REF))).toEqual(["a1:first note"]);
+    expect(notes(await B.store.getSet(ACCOUNT, REF))).toEqual(["a1:first note"]);
   });
 
   it("uploads notes made before sync existed", async () => {
@@ -461,11 +639,32 @@ describe("IMAP sync between two devices", () => {
     expect(server.messages).toHaveLength(1);
   });
 
+  // Dev issue #4: notes imported for an account that isn't in Thunderbird wait for it.
+  it("gives notes imported for a missing account to that account only, once it is added", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const waiting = { ...initialSet("2026-10-01T10:00:00.000Z"), email: { messageId: REF, subject: "Test", account: "work@example.com" } };
+    await A.act(() => A.store.putSet(waiting));
+    // The same email is in this (personal) account: the notes don't go there.
+    A.messenger.messages.query = async () => ({ id: null, messages: [{ id: 1, headerMessageId: REF, tags: [], folder: { accountId: ACCOUNT, name: "INBOX", path: "/INBOX" } }] }) as never;
+    await A.act(() => A.sync.pullAll());
+    expect(await A.act(() => A.store.getSet(ACCOUNT, REF))).toBeNull();
+    expect((await A.act(() => A.store.getSet(undefined, REF)))?.email.account).toBe("work@example.com");
+    expect(server.messages).toHaveLength(0);
+    // The work account added (here: an identity of it, case aside): the notes go to it, synced.
+    A.messenger.accounts.list = async () => [{ id: ACCOUNT, name: "Test", type: "imap", identities: [{ email: "me@example.com" }, { email: "Work@Example.com" }] }] as never;
+    await A.act(() => A.sync.pullAll());
+    const assigned = await A.act(() => A.store.getSet(ACCOUNT, REF));
+    expect(notes(assigned)).toEqual(["a1:first note"]);
+    expect(assigned?.email.account).toBeUndefined();
+    expect(await A.act(() => A.store.getSet(undefined, REF))).toBeNull();
+  });
+
   it("syncs label colours through one settings carrier, merged per label (D40)", async () => {
     const server = makeServer();
     const A = await device(server);
     const B = await device(server);
-    const colours = (d: typeof A) => d.act(() => d.sync.getLabelColours()).then((c) => Object.fromEntries(Object.entries(c).map(([l, v]) => [l, v.colour])));
+    const colours = (d: typeof A) => d.act(() => d.sync.getSettings(ACCOUNT)).then((s) => s.labelColours).then((c) => Object.fromEntries(Object.entries(c).map(([l, v]) => [l, v.colour])));
     const settingsCarriers = () => server.messages.filter((m) => !m.deleted && m.eml.includes("X-Annot-Ref: <thundernotes-settings@thundernotes.invalid>"));
 
     await A.act(() => A.sync.setLabelColour("Work", "blue"));
@@ -491,20 +690,62 @@ describe("IMAP sync between two devices", () => {
     expect(await B.act(() => B.sync.syncProblems())).toEqual([]);
   });
 
+  it("keeps a settings carrier it couldn't read for a connection problem when uploading its own settings", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const B = await device(server);
+    const colours = (d: typeof A) => d.act(() => d.sync.getSettings(ACCOUNT)).then((s) => Object.fromEntries(Object.entries(s.labelColours).map(([l, v]) => [l, v.colour])));
+    await A.act(() => A.sync.setLabelColour("work", "blue"));
+    const remote = server.messages[0]!;
+    const read = B.messenger.messages.getAttachmentFile;
+    B.messenger.messages.getAttachmentFile = async () => {
+      throw Error("NS_ERROR_NET_TIMEOUT");
+    };
+    await B.act(() => B.sync.setLabelColour("home", "green")).catch(() => {});
+    expect(server.messages.some((m) => m.headerMessageId === remote.headerMessageId && !m.deleted)).toBe(true);
+    B.messenger.messages.getAttachmentFile = read;
+    await B.act(() => B.sync.pull(ACCOUNT));
+    await A.act(() => A.sync.pull(ACCOUNT));
+    expect(await colours(A)).toEqual({ work: "blue", home: "green" });
+    expect(await colours(B)).toEqual({ work: "blue", home: "green" });
+  });
+
   it("keeps notes and settings apart", async () => {
     const server = makeServer();
     const A = await device(server);
     const B = await device(server);
     await A.act(async () => {
       await A.store.putSet(initialSet("2026-10-17T10:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
       await A.sync.setLabelColour("work", "red");
     });
     await B.act(() => B.sync.pull(ACCOUNT));
-    expect(notes(await B.store.getSet(REF))).toEqual(["a1:first note"]);
-    expect((await B.act(() => B.sync.getLabelColours())).work?.colour).toBe("red");
-    expect(await B.store.getSet("thundernotes-settings@thundernotes.invalid")).toBeNull();
+    expect(notes(await B.store.getSet(ACCOUNT, REF))).toEqual(["a1:first note"]);
+    expect((await B.act(() => B.sync.getSettings(ACCOUNT))).labelColours.work?.colour).toBe("red");
+    expect(await B.store.getSet(ACCOUNT, "thundernotes-settings@thundernotes.invalid")).toBeNull();
     expect(server.messages.filter((m) => !m.deleted)).toHaveLength(2);
+  });
+
+  // D42: each account its own label settings; the shared ones from before go to every account once.
+  it("keeps label settings per account and starts every account with the shared ones from before", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    await A.messenger.storage.local.set({ labelColours: { work: { colour: "blue", updated: "2026-10-01T00:00:00.000Z" } } });
+    expect((await A.act(() => A.sync.getSettings(ACCOUNT))).labelColours.work?.colour).toBe("blue");
+    // A colour chosen for another account doesn't reach this one's folder.
+    await A.act(() => A.sync.setLabelColour("private-thing", "pink", ["other"]));
+    expect((await A.act(() => A.sync.getSettings("other"))).labelColours["private-thing"]?.colour).toBe("pink");
+    expect((await A.act(() => A.sync.getSettings(ACCOUNT))).labelColours["private-thing"]).toBeUndefined();
+    expect(server.messages.map((m) => m.eml).join()).not.toContain("private-thing");
+  });
+
+  it("loses no label choice when two accounts' settings change at the same time", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    await A.act(() => Promise.all([A.sync.setLabelColour("one", "red", ["first"]), A.sync.setLabelColour("two", "blue", ["second"]), A.sync.setLabelOrder("az", undefined, ["first"])]));
+    expect((await A.act(() => A.sync.getSettings("first"))).labelColours.one?.colour).toBe("red");
+    expect((await A.act(() => A.sync.getSettings("first"))).labelOrder?.mode).toBe("az");
+    expect((await A.act(() => A.sync.getSettings("second"))).labelColours.two?.colour).toBe("blue");
   });
 
   it("syncs the label order as a whole, next to colours changed elsewhere (D40)", async () => {
@@ -519,7 +760,7 @@ describe("IMAP sync between two devices", () => {
     await A.act(() => A.sync.pull(ACCOUNT));
     await B.act(() => B.sync.pull(ACCOUNT));
     for (const d of [A, B]) {
-      const s = await d.act(() => d.sync.getSettings());
+      const s = await d.act(() => d.sync.getSettings(ACCOUNT));
       expect(s.labelOrder).toMatchObject({ mode: "custom", custom: ["home", "work"] });
       expect(Object.fromEntries(Object.entries(s.labelColours).map(([l, v]) => [l, v.colour]))).toEqual({ work: "blue", home: "green" });
     }
@@ -527,7 +768,7 @@ describe("IMAP sync between two devices", () => {
     await new Promise((r) => setTimeout(r, 5));
     await B.act(() => B.sync.setLabelOrder("az"));
     await A.act(() => A.sync.pull(ACCOUNT));
-    expect((await A.act(() => A.sync.getSettings())).labelOrder).toMatchObject({ mode: "az", custom: ["home", "work"] }); // the own order kept
+    expect((await A.act(() => A.sync.getSettings(ACCOUNT))).labelOrder).toMatchObject({ mode: "az", custom: ["home", "work"] }); // the own order kept
   });
 
   it("a purge reaches the other device, which still had the copies (D33)", async () => {
@@ -537,21 +778,21 @@ describe("IMAP sync between two devices", () => {
     const base = { ...initialSet("2026-10-17T10:00:00.000Z"), annotations: [annotation("a1", "first", "2026-10-17T10:00:00.000Z"), annotation("a2", "second", "2026-10-17T10:00:00.000Z")] };
     await A.act(async () => {
       await A.store.putSet(base);
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     await A.act(async () => {
-      const s = deleteAnnotation((await A.store.getSet(REF))!, "a1", "2026-10-17T11:00:00.000Z");
+      const s = deleteAnnotation((await A.store.getSet(ACCOUNT, REF))!, "a1", "2026-10-17T11:00:00.000Z");
       await A.store.putSet({ ...s, rev: s.rev + 1 });
-      A.sync.schedulePush(REF);
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     await B.act(() => B.sync.pull(ACCOUNT));
-    expect(restorable(await B.store.getSet(REF)).annotations.map((a) => a.id)).toEqual(["a1"]); // B has the copy
+    expect(restorable(await B.store.getSet(ACCOUNT, REF)).annotations.map((a) => a.id)).toEqual(["a1"]); // B has the copy
     await A.act(async () => {
-      await A.store.putSet(purgeDeleted((await A.store.getSet(REF))!, "2026-10-17T12:00:00.000Z"));
-      A.sync.schedulePush(REF);
+      await A.store.putSet(purgeDeleted((await A.store.getSet(ACCOUNT, REF))!, "2026-10-17T12:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
     });
     await B.act(() => B.sync.pull(ACCOUNT));
-    const onB = (await B.store.getSet(REF))!;
+    const onB = (await B.store.getSet(ACCOUNT, REF))!;
     expect(restorable(onB).annotations).toEqual([]);
     expect(onB.annotations.map((a) => a.id)).toEqual(["a2"]); // the rest untouched
     expect(onB.tombstones?.map((t) => t.id)).toEqual(["a1"]); // the deletion itself stays

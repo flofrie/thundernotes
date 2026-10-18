@@ -4,6 +4,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  purgeDeleted,
+  restorable,
+  deleteEmailNote,
+  hasDeletions,
+  hasConflict,
   FormatError,
   deleteAnnotation,
   fileName,
@@ -58,7 +63,7 @@ describe("toMarkdown / fromMarkdown", () => {
 
   it("writes a readable file: title, email note, one section per note", () => {
     const md = toMarkdown(set);
-    expect(md.startsWith("---\nthundernotes: 1\n")).toBe(true);
+    expect(md.startsWith("---\nthundernotes: 2\n")).toBe(true);
     expect(md).toContain("# Contract renewal – draft v3\n\nGeneral note on the whole email.");
     expect(md).toContain("## “termination period of 6 months” <!-- tn:7f3c9a10-0000-4000-8000-000000000001 -->");
     // Plain highlights have no section, only front matter.
@@ -71,7 +76,8 @@ describe("toMarkdown / fromMarkdown", () => {
 
   it("reads hand-edited files: other YAML style, edited note, deleted section", () => {
     const edited = `---
-thundernotes: 1
+thundernotes: 2
+body_boundary: 0
 message_id: '<CAF3xQ9b1k@mail.example.com>'
 subject: Contract renewal
 created: 2026-10-13T08:02:11.000Z
@@ -87,9 +93,12 @@ annotations:
 
 # Contract renewal
 
+<!-- thundernotes:boundary:0 -->
 ## “first” <!--   tn:a1   -->
 
 Edited in Obsidian.
+
+<!-- thundernotes:boundary:0 -->
 `;
     const parsed = fromMarkdown(edited);
     expect(parsed.annotations.map((a) => a.bodyMd)).toEqual(["Edited in Obsidian.", ""]);
@@ -164,6 +173,16 @@ describe("mergeSets", () => {
     expect(merged.updated).toBe(now);
   });
 
+  // Design review (issue #1): in sync, equal times are two edits, not a hand-edited file.
+  it("turns two different texts with equal times and no known base into a conflict box when syncing", () => {
+    const theirs = fromMarkdown(toMarkdown(set).replace("Push back.", "Push back hard."));
+    const mine: AnnotationSet = { ...set, annotations: [{ ...set.annotations[0]!, bodyMd: set.annotations[0]!.bodyMd.replace("Push back.", "Accept.") }, set.annotations[1]!] };
+    const { set: merged } = mergeSets(mine, theirs, "2026-10-20T12:00:00.000Z", "sync");
+    expect(hasConflict(merged.annotations[0]!.bodyMd)).toBe(true);
+    expect(merged.annotations[0]!.bodyMd).toContain("Push back hard.");
+    expect(merged.annotations[0]!.bodyMd).toContain("Accept.");
+  });
+
   it("keeps notes changed in the add-on after the export over an older file", () => {
     const local: AnnotationSet = {
       ...set,
@@ -235,13 +254,41 @@ describe("sync: tombstones and the whole-email note", () => {
     expect(mergeSets(deviceB, deviceA).set.emailNoteMd).toBe("A's new email note");
   });
 
-  it("drops tombstones after 30 days; a set with only tombstones has no content", () => {
+  it("drops a deleted note's copy after 30 days and the record of its deletion after a year", () => {
     const empty = deleteAnnotation(deleteAnnotation(set, a1.id, "2026-10-01T00:00:00.000Z"), a2.id, "2026-10-20T00:00:00.000Z");
     const withoutNote = { ...empty, emailNoteMd: undefined };
     delete withoutNote.emailNoteMd;
     expect(hasContent(withoutNote)).toBe(false);
-    expect(gcTombstones(withoutNote, "2026-11-05T00:00:00.000Z").tombstones).toEqual([{ id: a2.id, deleted: "2026-10-20T00:00:00.000Z", annotation: a2 }]);
-    expect(gcTombstones(withoutNote, "2026-12-01T00:00:00.000Z").tombstones).toBeUndefined();
+    expect(hasDeletions(withoutNote)).toBe(true);
+    // a1 deleted over 30 days ago: no longer restorable, but still recorded as deleted.
+    expect(gcTombstones(withoutNote, "2026-11-05T00:00:00.000Z").tombstones).toEqual([
+      { id: a1.id, deleted: "2026-10-01T00:00:00.000Z" },
+      { id: a2.id, deleted: "2026-10-20T00:00:00.000Z", annotation: a2 },
+    ]);
+    expect(gcTombstones(withoutNote, "2027-06-01T00:00:00.000Z").tombstones).toEqual([
+      { id: a1.id, deleted: "2026-10-01T00:00:00.000Z" },
+      { id: a2.id, deleted: "2026-10-20T00:00:00.000Z" },
+    ]);
+    const gone = gcTombstones(withoutNote, "2027-11-01T00:00:00.000Z");
+    expect(gone.tombstones).toBeUndefined();
+    expect(hasDeletions(gone)).toBe(false);
+  });
+
+  it("doesn't let a copy that was away longer than 30 days bring a deleted note back", () => {
+    const stale = set; // a device that still has a1, offline since before the deletion
+    const deleted = gcTombstones(deleteAnnotation(set, a1.id, "2026-10-20T00:00:00.000Z"), "2026-12-01T00:00:00.000Z");
+    expect(deleted.tombstones).toEqual([{ id: a1.id, deleted: "2026-10-20T00:00:00.000Z" }]);
+    const { set: merged } = mergeSets(stale, fromMarkdown(toMarkdown(deleted)), "2026-12-01T00:00:00.000Z", "sync");
+    expect(merged.annotations.map((a) => a.id)).not.toContain(a1.id);
+  });
+
+  it("keeps the record of a deleted whole-email note after its copy goes, also through a purge", () => {
+    const deleted = deleteEmailNote({ ...set, emailNoteMd: "Call back" }, "2026-10-01T00:00:00.000Z");
+    const aged = gcTombstones(deleted, "2026-11-05T00:00:00.000Z");
+    expect(aged.deletedEmailNote).toEqual({ deleted: "2026-10-01T00:00:00.000Z" });
+    expect(restorable(aged).emailNote).toBeNull();
+    expect(fromMarkdown(toMarkdown(aged)).deletedEmailNote).toEqual({ deleted: "2026-10-01T00:00:00.000Z" });
+    expect(purgeDeleted(deleted, "2026-10-02T00:00:00.000Z").deletedEmailNote).toEqual({ deleted: "2026-10-01T00:00:00.000Z" });
   });
 });
 
@@ -301,5 +348,184 @@ describe("whole-email note colour", () => {
     expect(fromMarkdown(toMarkdown(blue)).emailNoteColour).toBe("blue");
     expect(mergeSets(set, blue).set.emailNoteColour).toBe("blue");
     expect(mergeSets(blue, set).set.emailNoteColour).toBe("blue");
+  });
+});
+
+// Issue #4: a literal marked heading in a note (an example of the format) must stay text.
+describe("marked headings inside a note", () => {
+  const withBody = (bodyMd: string): AnnotationSet => ({
+    version: 1,
+    email: { messageId: "m@x" },
+    rev: 1,
+    created: "2026-10-18T10:00:00.000Z",
+    updated: "2026-10-18T10:00:00.000Z",
+    emailNoteMd: bodyMd,
+    annotations: [{ id: "a", selectors: [{ type: "TextQuoteSelector", exact: "q" }], bodyMd, created: "2026-10-18T10:00:00.000Z", updated: "2026-10-18T10:00:00.000Z" }],
+  });
+  for (const fence of ["```", "~~~", "````"]) {
+    it(`keeps everything after an example in a ${fence} block`, () => {
+      const body = `Before\n\n${fence}markdown\n## example <!-- tn:example -->\nexample body\n## “q” <!-- tn:a -->\n${fence}\n\nAfter`;
+      const back = fromMarkdown(toMarkdown(withBody(body)));
+      expect(back.annotations[0]!.bodyMd).toBe(body);
+      expect(back.emailNoteMd).toBe(body);
+    });
+  }
+  it("keeps the note whole when a line with text after the backticks (not a closing fence) comes before a marker", () => {
+    const body = "Before\n\n```markdown\n``` still code\n## q <!-- tn:a -->\n```\n\nAfter";
+    expect(fromMarkdown(toMarkdown(withBody(body))).annotations[0]!.bodyMd).toBe(body);
+  });
+
+  it("doesn't let a note with an unclosed code block swallow the notes after it", () => {
+    const set = withBody("```\nunclosed code");
+    set.annotations.push({ ...set.annotations[0]!, id: "b", bodyMd: "second note" });
+    const back = fromMarkdown(toMarkdown(set));
+    expect(back.annotations.map((a) => a.bodyMd)).toEqual(["```\nunclosed code", "second note"]);
+  });
+
+  it("rejects old development formats rather than guessing section boundaries", () => {
+    const old = toMarkdown(withBody("note")).replace("thundernotes: 2", "thundernotes: 1");
+    expect(() => fromMarkdown(old)).toThrow(/unsupported format version 1/);
+  });
+
+  it("preserves a marker for a different annotation after a quote-prefixed fence inside code", () => {
+    const body = "Before\n\n```markdown\n> ```\n## literal <!-- tn:b -->\n```\n\nAfter";
+    const set = withBody(body);
+    set.annotations.push({ ...set.annotations[0]!, id: "b", bodyMd: "second note" });
+    const back = fromMarkdown(toMarkdown(set));
+    expect(back.annotations.map((a) => a.bodyMd)).toEqual([body, "second note"]);
+    expect(back.emailNoteMd).toBe(body);
+  });
+
+  it("preserves the old generated-closure suffix when written literally", () => {
+    const body = "Code sample:\n\n```\nhello\n```\n<!-- tn:code-closed -->";
+    const back = fromMarkdown(toMarkdown(withBody(body)));
+    expect(back.annotations[0]!.bodyMd).toBe(body);
+    expect(back.emailNoteMd).toBe(body);
+  });
+
+
+  it("preserves code indentation and Markdown hard-break spaces in both note kinds", () => {
+    const body = "    indented code\n\nline with break  \nlast line  ";
+    const back = fromMarkdown(toMarkdown(withBody(body)));
+    expect(back.annotations[0]!.bodyMd).toBe(body);
+    expect(back.emailNoteMd).toBe(body);
+  });
+
+  it("chooses a boundary absent from note text, even when it contains format examples", () => {
+    const body = "<!-- thundernotes:boundary:0 -->\n<!-- thundernotes:boundary:1 -->\n## literal <!-- tn:a -->";
+    const md = toMarkdown(withBody(body));
+    expect(md).toContain("body_boundary: 2\n");
+    expect(fromMarkdown(md).annotations[0]!.bodyMd).toBe(body);
+  });
+
+  it("rejects duplicate and unknown section headers instead of discarding text", () => {
+    const md = toMarkdown(withBody("note"));
+    expect(() => fromMarkdown(md.replace("<!-- tn:a -->", "<!-- tn:unknown -->"))).toThrow(/unknown/);
+    const duplicate = md.replace(/\n<!-- thundernotes:boundary:0 -->\s*$/, "\n<!-- thundernotes:boundary:0 -->\n## duplicate <!-- tn:a -->\ntext\n<!-- thundernotes:boundary:0 -->\n");
+    expect(() => fromMarkdown(duplicate)).toThrow(/duplicate annotation section/);
+  });
+
+  it("rejects truncated frames and invalid boundary metadata", () => {
+    const md = toMarkdown(withBody("note"));
+    expect(() => fromMarkdown(md.replace(/\n<!-- thundernotes:boundary:0 -->\s*$/, ""))).toThrow(/final body boundary/);
+    for (const value of ["-1", "1.5", "null", "9007199254740992", "'x'"]) {
+      expect(() => fromMarkdown(md.replace("body_boundary: 0", `body_boundary: ${value}`))).toThrow(/body_boundary/);
+    }
+  });
+
+  // An edited export being imported: nothing dropped, nothing failed; each problem said.
+  it("on import keeps each section it can't place as a note of its own, and says so", () => {
+    const md = toMarkdown(withBody("note"));
+    const read = (text: string) => {
+      const problems: string[] = [];
+      const set = fromMarkdown(text, { onProblem: (p) => problems.push(p) });
+      return { set, problems };
+    };
+    const quote = withBody("note").annotations[0]!.selectors.find((s) => s.type === "TextQuoteSelector")!.exact;
+
+    // A marked heading for a note the file doesn't list: its own note, anchored at the quote it names.
+    const unknown = read(md.replace("<!-- tn:a -->", "<!-- tn:unknown -->"));
+    expect(unknown.problems).toEqual(["section for an unknown note unknown: kept as a note of its own"]);
+    expect(unknown.set.emailNoteMd).toBe("note"); // untouched
+    const [a, recovered] = unknown.set.annotations;
+    expect(a!.bodyMd).toBe("");
+    expect(recovered!.id).toMatch(/^recovered-[0-9a-f]{8}$/);
+    expect(recovered!.bodyMd).toBe("note");
+    expect(recovered!.selectors).toEqual([{ type: "TextQuoteSelector", exact: quote }]);
+    // Imported again: the same note, not a second copy.
+    expect(read(md.replace("<!-- tn:a -->", "<!-- tn:unknown -->")).set.annotations[1]!.id).toBe(recovered!.id);
+
+    // A heading without a marker is the user's text: kept in the note, which has no quote to anchor at.
+    const unmarked = read(md.replace(/ <!-- tn:a -->/, ""));
+    expect(unmarked.problems).toEqual(["section without a note marker: kept as a note of its own"]);
+    expect(unmarked.set.annotations[1]!.bodyMd).toMatch(/^## “.*”\n\nnote$/);
+    expect(unmarked.set.annotations[1]!.selectors).toEqual([{ type: "TextQuoteSelector", exact: "" }]);
+
+    // A second section for the same note: a note of its own on the same passage.
+    const duplicate = read(md.replace(/\n<!-- thundernotes:boundary:0 -->\s*$/, "\n<!-- thundernotes:boundary:0 -->\n## again <!-- tn:a -->\nmore\n<!-- thundernotes:boundary:0 -->\n"));
+    expect(duplicate.problems).toEqual(["duplicate annotation section a: kept as a note of its own on the same passage"]);
+    expect(duplicate.set.annotations.map((x) => x.bodyMd)).toEqual(["note", "more"]);
+    expect(duplicate.set.annotations[1]!.selectors).toEqual(duplicate.set.annotations[0]!.selectors);
+
+    const truncated = read(md.replace(/\n<!-- thundernotes:boundary:0 -->\s*$/, ""));
+    expect(truncated.problems).toEqual(["missing final body boundary"]);
+    expect(truncated.set.annotations[0]!.bodyMd).toBe("note");
+    // What can't be read at all still fails.
+    expect(() => read(md.replace("body_boundary: 0", "body_boundary: -1"))).toThrow(/body_boundary/);
+  });
+
+  // PR #7 review: every unplaceable frame needs an independent note, including the first.
+  it.each(["", "## Edited subject\n"])("recovers a malformed first frame with heading %j as an unanchored note", (heading) => {
+    const md = toMarkdown(withBody("keep this text")).replace(/^# .*\n/m, heading);
+    expect(() => fromMarkdown(md)).toThrow(/body title missing/);
+    const problems: string[] = [];
+    const incoming = fromMarkdown(md, { onProblem: (p) => problems.push(p) });
+    expect(problems).toEqual(["body title missing"]);
+    expect(incoming.emailNoteMd).toBeUndefined();
+    const recovered = incoming.annotations.find((a) => a.id.startsWith("recovered-"))!;
+    expect(recovered.bodyMd).toBe([heading.trimEnd(), "keep this text"].filter(Boolean).join("\n\n"));
+    expect(recovered.selectors).toEqual([{ type: "TextQuoteSelector", exact: "" }]);
+    expect(fromMarkdown(md, { onProblem: () => {} }).annotations.find((a) => a.id === recovered.id)).toEqual(recovered);
+    expect(fromMarkdown(toMarkdown(incoming)).annotations.find((a) => a.id === recovered.id)).toEqual(recovered);
+  });
+
+  it("does not invent a recovery note for an empty malformed first frame", () => {
+    const file = withBody("annotation text");
+    delete file.emailNoteMd;
+    const md = toMarkdown(file).replace(/^# .*\n/m, "");
+    const problems: string[] = [];
+    const incoming = fromMarkdown(md, { onProblem: (p) => problems.push(p) });
+    expect(problems).toEqual(["body title missing"]);
+    expect(incoming.annotations).toEqual(file.annotations);
+    expect(incoming.emailNoteMd).toBeUndefined();
+  });
+
+  // Added to another note, repaired text could lose the import merge to a newer local note.
+  it("keeps a repaired section through the import merge, whatever is newer locally", () => {
+    const file = withBody("note");
+    const md = toMarkdown(file).replace("<!-- tn:a -->", "<!-- tn:unknown -->");
+    const incoming = fromMarkdown(md, { onProblem: () => {} });
+    const later = "2099-01-01T00:00:00.000Z";
+    const local = { ...file, updated: later, emailNoteMd: "edited here", emailNoteUpdated: later, annotations: file.annotations.map((x) => ({ ...x, bodyMd: "edited here", updated: later })) };
+    const merged = mergeSets(local, incoming, undefined, "import").set;
+    expect(merged.emailNoteMd).toBe("edited here");
+    expect(merged.annotations.map((x) => x.bodyMd)).toEqual(["edited here", "note"]);
+  });
+
+  it("round-trips combinations of literal markers, quotes, lists and unfinished code", () => {
+    const fragments = ["plain", "```", "~~~", "> ```", "    code", "## literal <!-- tn:b -->", "<!-- tn:code-closed -->", "<!-- thundernotes:boundary:0 -->", "- [ ] task", "Grüße 👋"];
+    for (const left of fragments) for (const right of fragments) {
+      const body = `${left}\n\n${right}`;
+      const set = withBody(body);
+      set.annotations.push({ ...set.annotations[0]!, id: "b", bodyMd: right });
+      const back = fromMarkdown(toMarkdown(set));
+      expect(back.annotations.map((a) => a.bodyMd)).toEqual([body, right]);
+      expect(back.emailNoteMd).toBe(body);
+    }
+  });
+
+  it("keeps a marked heading for a note the file doesn't have as text", () => {
+    const body = "Before\n## stray <!-- tn:nobody -->\nAfter";
+    expect(fromMarkdown(toMarkdown(withBody(body))).annotations[0]!.bodyMd).toBe(body);
   });
 });

@@ -14,6 +14,10 @@ import { colourItem, labelColourItems } from "../src/edit-menu.js";
 
 // jsdom has no execCommand; CodeMirror uses it for selections in a shadow root (browsers have it).
 document.execCommand ??= () => false;
+// jsdom has no Range geometry. CodeMirror's scheduled measurement can run between assertions;
+// these model/editor tests do not exercise layout, so supply its normal empty-layout result.
+if (!Range.prototype.getClientRects) Object.defineProperty(Range.prototype, "getClientRects", { value: () => [] });
+if (!Range.prototype.getBoundingClientRect) Object.defineProperty(Range.prototype, "getBoundingClientRect", { value: () => new DOMRect() });
 
 let editor: LiveEditor | null = null;
 
@@ -512,6 +516,38 @@ describe("live preview", () => {
     expect(editor!.getValue()).toBe("- [ ] call @2027-10-24\n- [ ] ask @freitag");
     content.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
     expect(editor!.getValue()).toBe("- [ ] call @24.10.27\n- [ ] ask @freitag");
+  });
+
+
+  for (const [name, input, expected] of [
+    ["fenced code", "```markdown\n@24.10.27\n```\n\nCall @24.10.27", "```markdown\n@24.10.27\n```\n\nCall @2027-10-24"],
+    ["tilde fence", "~~~\n@24.10.27\n~~~\nCall @24.10.27", "~~~\n@24.10.27\n~~~\nCall @2027-10-24"],
+    ["quoted code", "> ```\n> @24.10.27\n> ```\n\nCall @24.10.27", "> ```\n> @24.10.27\n> ```\n\nCall @2027-10-24"],
+    ["indented code", "    @24.10.27\n\nCall @24.10.27", "    @24.10.27\n\nCall @2027-10-24"],
+    ["inline code", "`@24.10.27` and @24.10.27", "`@24.10.27` and @2027-10-24"],
+    ["unclosed fence", "```\n@24.10.27", "```\n@24.10.27"],
+    ["CRLF", "```\r\n@24.10.27\r\n```\r\nCall @24.10.27", "```\n@24.10.27\n```\nCall @2027-10-24"],
+  ]) it(`keeps pasted dates literal in ${name}`, () => {
+    const { root } = open("");
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { getData: () => input } });
+    const content = root.querySelector(".cm-content")!;
+    content.dispatchEvent(event);
+    expect(editor!.getValue()).toBe(expected);
+    // Date correction is its own undo step, while code examples stay untouched.
+    if (expected !== input!.replace(/\r\n?/g, "\n")) {
+      content.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
+      expect(editor!.getValue()).toBe(input!.replace(/\r\n?/g, "\n"));
+    }
+  });
+
+  it("classifies dates after a pasted closing fence in the resulting document", () => {
+    const { root } = open("```\nold code\n");
+    selectRange(root, editor!.getValue().length, editor!.getValue().length);
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { getData: () => "@24.10.27\n```\nCall @24.10.27" } });
+    root.querySelector(".cm-content")!.dispatchEvent(event);
+    expect(editor!.getValue()).toBe("```\nold code\n@24.10.27\n```\nCall @2027-10-24");
   });
 
   it("offers dates after @ and takes one with Enter (D38)", () => {

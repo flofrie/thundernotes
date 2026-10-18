@@ -24,6 +24,25 @@ export interface Settings {
   labelOrder?: LabelOrder;
 }
 
+/** Label settings per account (D42), by Thunderbird's account id on this device. */
+export type SettingsByAccount = Record<string, Settings>;
+
+/**
+ * One account's settings for a view across accounts (D42): a label's colour from the first
+ * account (in `accountOrder`) that has a choice for it, the order of the first that has one.
+ */
+export function combinedSettings(byAccount: SettingsByAccount, accountOrder: string[]): Settings {
+  const labelColours: Settings["labelColours"] = {};
+  let labelOrder: LabelOrder | undefined;
+  for (const id of accountOrder) {
+    const s = byAccount[id];
+    if (!s) continue;
+    for (const [label, choice] of Object.entries(s.labelColours)) if (!(label in labelColours)) labelColours[label] = choice;
+    labelOrder ??= s.labelOrder;
+  }
+  return { version: 1, labelColours, ...(labelOrder ? { labelOrder } : {}) };
+}
+
 /** Both devices' settings: colours per label, the order as a whole (the newer). */
 export function mergeSettings(a: Settings, b: Settings): Settings {
   const labelOrder = mergeLabelOrder(a.labelOrder, b.labelOrder);

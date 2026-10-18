@@ -40,8 +40,8 @@ describe("renderMarkdown", () => {
 
   it("renders tasks as drawn boxes", () => {
     const html = renderMarkdown("- [ ] open\n- [x] done\n- plain");
-    expect(html).toContain('<li class="task"><span class="task-box tn-box"></span>open</li>');
-    expect(html).toContain('<li class="task task-done"><span class="task-box tn-box tn-box-done"></span>done</li>');
+    expect(html).toContain('<li class="task"><span class="task-box tn-box" data-line="0"></span>open</li>');
+    expect(html).toContain('<li class="task task-done"><span class="task-box tn-box tn-box-done" data-line="1"></span>done</li>');
     expect(html).toContain("<li>plain</li>");
   });
 
@@ -102,7 +102,7 @@ describe("renderMarkdown", () => {
   });
 
   it("draws a box with nothing after it as an empty task", () => {
-    expect(renderMarkdown("- [ ]")).toContain('<li class="task"><span class="task-box tn-box"></span></li>');
+    expect(renderMarkdown("- [ ]")).toContain('<li class="task"><span class="task-box tn-box" data-line="0"></span></li>');
     expect(renderMarkdown("- [x]\n- [ ]")).toContain('class="task task-done"');
     expect(renderMarkdown("- [ ]x")).not.toContain("task-box"); // not a box: text right after the bracket
   });
@@ -132,6 +132,6 @@ describe("renderMarkdown", () => {
   });
 
   it("marks @ dates that aren't ISO yet with a dotted underline (D38)", () => {
-    expect(renderMarkdown("call @24.10.27 today")).toMatch(/<span class="tn-loose-date" title="Not a date reference yet: [^"]+">@24\.10\.27<\/span>/);
+    expect(renderMarkdown("call @24.10.27 today")).toMatch(/<span class="tn-loose-date" data-iso="2027-10-24" title="Not a date reference yet: [^"]+">@24\.10\.27<\/span>/);
   });
 });

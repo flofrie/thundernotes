@@ -64,6 +64,18 @@
     #accounts .name { font-weight: 600; }
     #accounts .state { color: var(--muted); }
     #accounts .problem { color: var(--red); }
+    #missingList { list-style: none; margin: 0 0 10px; padding: 0; font-size: 13px; }
+    #missingList > li { padding: 4px 0; border-top: 1px solid var(--line); }
+    #missingList .line { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+    #missingList .what { flex: 1; min-width: 0; }
+    #missingList .when { color: var(--muted); }
+    #missingList button { font-size: 12px; padding: 1px 8px; }
+    #missingList button.armed { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+    /* Come from the task view's "settings" link: the Delete button framed for a moment. */
+    .flash { animation: flash 0.9s ease-in-out 3; }
+    @keyframes flash { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 3px var(--accent); border-color: var(--accent); } }
+    @media (prefers-reduced-motion: reduce) { .flash { animation: none; outline: 3px solid var(--accent); } }
+    #missingList pre { white-space: pre-wrap; font: 12px/1.45 system-ui, sans-serif; background: var(--chip); border-radius: 6px; padding: 8px; margin: 6px 0 2px; }
     #status { white-space: pre-wrap; font-size: 13px; }
     #status:empty { display: none; }
     #status.error { color: var(--red); }
@@ -146,16 +158,27 @@
   </section>
 
   <section class="card" id="sync">
-    <h2>Sync and devices</h2>
+    <h2>Sync</h2>
     <p class="summary">Notes sync through a ThunderNotes folder in each IMAP account.</p>
     <ul id="accounts"><li class="state">Loading…</li></ul>
     <div class="actions"><button id="syncNow">Sync now</button></div>
-    <div class="row field"><span class="text"><span class="title">Name of this device</span>
-      <small>Shown when a note was changed on two devices at once, so you can tell the versions apart.</small></span>
-      <input type="text" id="deviceName"></div>
     <label class="row"><span class="text"><span class="title">Sync collapsed and expanded notes</span>
       <small>Click a note's quote line to collapse it. Off: each device remembers its own. On: stored with the notes on the mail server and applied everywhere.</small></span>
       <input type="checkbox" role="switch" id="syncFolded"></label>
+  </section>
+
+  <section class="card" id="missing" hidden>
+    <h2>Orphaned notes</h2>
+    <p class="summary">Notes whose email can't be found any more (removed outside Thunderbird or on the server). They are kept until you delete them.</p>
+    <ul id="missingList"></ul>
+  </section>
+
+  <section class="card" id="devices">
+    <h2>Devices</h2>
+    <p class="summary">This computer, as your other devices see it.</p>
+    <div class="row field"><span class="text"><span class="title">Name of this device</span>
+      <small>Shown when a note was changed on two devices at once, so you can tell the versions apart.</small></span>
+      <input type="text" id="deviceName"></div>
   </section>
 
   <section class="card" id="backup">

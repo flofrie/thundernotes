@@ -22,15 +22,18 @@ import {
   type LabelOrder,
   type LabelOrderMode,
   type Settings,
+  type SettingsByAccount,
   fromMarkdown,
   gcTombstones,
   hasContent,
+  hasDeletions,
   mergeSets,
   parseCarrierHeaders,
   rememberSynced,
   withBases,
   type AnnotationSet,
 } from "@thundernotes/core";
+import { accountByAddress } from "./accounts.js";
 import { deleteSet, getAllSets, getSet, putSet } from "./store.js";
 import { tagCopies } from "./tags.js";
 
@@ -54,8 +57,12 @@ interface AccountState {
   carriers: Record<string, CarrierEntry>;
   /** Carriers we deleted that may still be listed until the folder is expunged. */
   deleted?: string[];
-  /** Carriers that couldn't be read, with the reason; warned about while they exist (D35). */
-  unreadable?: Record<string, { subject: string; reason: string }>;
+  /**
+   * Carriers that couldn't be read, with the reason; warned about while they exist (D35). Kept:
+   * never removed by cleanup (they may hold notes this version doesn't understand, e.g. from a
+   * newer ThunderNotes), only by the user; read again after an update of the add-on (`version`).
+   */
+  unreadable?: Record<string, { subject: string; reason: string; version?: string }>;
   /** Settings as the server has them (read from settings carriers or uploaded), D40. Older versions stored only the colours. */
   settingsSynced?: Settings | LabelColours;
 }
@@ -156,6 +163,11 @@ async function recordOutcome(accountId: string, error: unknown): Promise<void> {
   const before = JSON.stringify(Object.values(all).filter((p) => p.failures >= WARN_AFTER));
   if (error === null) {
     if (!all[accountId]) return;
+    // A carrier that can't be read stays a problem while it is there, whatever else succeeds.
+    if (all[accountId].kind === "read") {
+      const state = await loadState(accountId);
+      if (Object.keys(state.unreadable ?? {}).some((id) => id in state.carriers)) return;
+    }
     delete all[accountId];
   } else if (isConnectionError(error)) {
     log(accountId, `server not reachable, not counted: ${(error as Error)?.message ?? error}`);
@@ -457,7 +469,9 @@ async function mergeRemote(accountId: string, ref: string, state: AccountState):
     if (entry.ref !== ref || entry.merged) continue;
     try {
       const incoming = await readCarrier(entry.tbId);
-      const local = await getSet(ref);
+      // The notes must be for the email the headers name; else they'd be merged into the wrong one.
+      if (norm(incoming.email.messageId) !== ref) throw new Error(`the notes inside are for another email (${incoming.email.messageId})`);
+      const local = await getSet(accountId, ref);
       // Three-way per note against the base the carrier names (D32).
       const result = local
         ? mergeSets(local, incoming, undefined, "sync").set
@@ -478,15 +492,30 @@ async function mergeRemote(accountId: string, ref: string, state: AccountState):
       console.warn(`ThunderNotes: could not read carrier for ${ref}`, e);
       if (isConnectionError(e)) continue; // read it next time
       const subject = (await messenger.messages.get(entry.tbId).catch(() => null))?.subject ?? ref;
-      state.unreadable = { ...state.unreadable, [id]: { subject, reason: String((e as Error)?.message ?? e) } };
+      state.unreadable = { ...state.unreadable, [id]: { subject, reason: String((e as Error)?.message ?? e), version: addonVersion() } };
     }
     entry.merged = true;
   }
   return changed;
 }
 
+/** This add-on's version (unreadable carriers are read again after an update). */
+const addonVersion = () => messenger.runtime.getManifest?.().version ?? "";
+
+/** Unreadable carriers recorded by an earlier version of the add-on: read again (it may understand them now). */
+function retryAfterUpdate(state: AccountState): void {
+  for (const [id, u] of Object.entries(state.unreadable ?? {})) {
+    if ((u.version ?? "") === addonVersion() || !state.carriers[id]) continue;
+    delete state.unreadable![id];
+    state.carriers[id]!.merged = false;
+  }
+}
+
 async function deleteCarriers(state: AccountState, keep: (id: string, e: CarrierEntry) => boolean): Promise<void> {
-  const remove = Object.entries(state.carriers).filter(([id, e]) => e.ref && !keep(id, e));
+  // Only carriers whose content is merged here: never an unreadable one (it may hold notes merged
+  // nowhere; only the user removes it), nor one not read yet or whose reading failed for the
+  // connection (dev issue #1: it was deleted by the next upload, its notes merged nowhere).
+  const remove = Object.entries(state.carriers).filter(([id, e]) => e.ref && !keep(id, e) && e.merged && !state.unreadable?.[id]);
   if (!remove.length) return;
   await messenger.messages
     .delete(
@@ -508,15 +537,17 @@ async function deleteCarriers(state: AccountState, keep: (id: string, e: Carrier
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-/** Pushes an email's notes a moment after the last change. */
-export function schedulePush(messageId: string): void {
+/** Pushes an email's notes in one account (D42) a moment after the last change. */
+export function schedulePush(accountId: string | undefined, messageId: string): void {
+  if (!accountId) return; // not assigned to an account yet: pullAll does that, then pushes
   const ref = norm(messageId);
-  clearTimeout(timers.get(ref));
+  const key = `${accountId}\u001f${ref}`;
+  clearTimeout(timers.get(key));
   timers.set(
-    ref,
+    key,
     setTimeout(() => {
-      timers.delete(ref);
-      push(ref).catch((e) => console.error(`ThunderNotes: sync of ${ref} failed`, e));
+      timers.delete(key);
+      push(accountId, ref).catch((e) => console.error(`ThunderNotes: sync of ${ref} failed`, e));
     }, PUSH_DELAY_MS)
   );
 }
@@ -528,31 +559,33 @@ export async function flushPushes(): Promise<void> {
     settingsTimer = undefined;
     await pushSettingsAll();
   }
-  const refs = [...timers.keys()];
-  for (const ref of refs) {
-    clearTimeout(timers.get(ref));
-    timers.delete(ref);
+  const keys = [...timers.keys()];
+  for (const key of keys) {
+    clearTimeout(timers.get(key));
+    timers.delete(key);
   }
-  for (const ref of refs) await push(ref);
+  for (const key of keys) {
+    const [accountId, ref] = key.split("\u001f") as [string, string];
+    await push(accountId, ref);
+  }
 }
 
-async function push(ref: string): Promise<void> {
-  const set = await getSet(ref);
-  const accountId = set?.email.accountId;
+async function push(accountId: string, ref: string): Promise<void> {
+  const set = await getSet(accountId, ref);
   if (!set || !(await isImapAccount(accountId))) return;
   const changedByMerge = await tracked(accountId!, async () => {
     const state = await loadState(accountId!);
     try {
-      const needed = hasContent(set) || !!set.tombstones?.length;
+      const needed = hasContent(set) || hasDeletions(set);
       const folder = await carrierFolder(accountId!, state, needed);
       if (!folder) return false;
       await scan(folder, state);
       // Changes from other devices first, so nothing is overwritten.
       const merged = await mergeRemote(accountId!, ref, state);
-      const local = gcTombstones((await getSet(ref)) ?? set);
-      if (!hasContent(local) && !local.tombstones?.length) {
+      const local = gcTombstones((await getSet(accountId, ref)) ?? set);
+      if (!hasContent(local) && !hasDeletions(local)) {
         await deleteCarriers(state, (_, e) => e.ref !== ref);
-        await deleteSet(ref);
+        await deleteSet(accountId, ref);
         return merged;
       }
       // Each note names the synced text it was edited from: the receiver's merge base (D32).
@@ -571,9 +604,11 @@ async function push(ref: string): Promise<void> {
         client: await clientId(),
         merged: true,
       };
+      // Recorded before the old revisions go: a crash in between leaves a duplicate, never a gap.
+      await saveState(accountId!, state);
       await deleteCarriers(state, (id, e) => e.ref !== ref || id === carrier.messageId);
       // The uploaded texts are synced now: possible bases for the next merge.
-      const current = await getSet(ref);
+      const current = await getSet(accountId, ref);
       if (current) await putSet(rememberSynced(current, local));
       return merged;
     } finally {
@@ -597,10 +632,11 @@ export function pull(accountId: string): Promise<void> {
       if (!folder) return;
       await within(30_000, messenger.thundernotes.refreshFolder(folder.id).catch(() => {}));
       await scan(folder, state);
+      retryAfterUpdate(state);
 
       // Settings (D40): merged first; uploaded again (a moment later) if this device knows more.
-      await mergeSettingsCarriers(state);
-      const local = await getSettings();
+      await mergeSettingsCarriers(accountId, state);
+      const local = await getSettings(accountId);
       const settingsCarriers = Object.values(state.carriers).filter((e) => e.ref === SETTINGS_REF).length;
       if (hasSettings(local) && (!sameSettings(local, synced(state)) || settingsCarriers !== 1)) scheduleSettingsPush();
 
@@ -609,7 +645,8 @@ export function pull(accountId: string): Promise<void> {
 
       // Consolidate: several carriers for one email, or local changes not on the server yet.
       const newest = new Map<string, CarrierEntry[]>();
-      for (const e of Object.values(state.carriers)) if (e.ref) newest.set(e.ref, [...(newest.get(e.ref) ?? []), e]);
+      // Readable ones only: an unreadable carrier is neither the newest state nor removed.
+      for (const [id, e] of Object.entries(state.carriers)) if (e.ref && !state.unreadable?.[id]) newest.set(e.ref, [...(newest.get(e.ref) ?? []), e]);
       for (const set of await getAllSets()) {
         if (set.email.accountId !== accountId) continue;
         const ref = norm(set.email.messageId);
@@ -617,21 +654,21 @@ export function pull(accountId: string): Promise<void> {
         if (gced !== set) await putSet(gced);
         const carriers = newest.get(ref) ?? [];
         const latest = carriers.reduce((m, e) => Math.max(m, e.rev), -1);
-        if (gced.rev > latest || gced !== set || (!hasContent(gced) && !gced.tombstones?.length)) {
+        if (gced.rev > latest || gced !== set || (!hasContent(gced) && !hasDeletions(gced))) {
           toPush.push(ref); // something newer here than on the server
         } else if (carriers.length > 1) {
           // All merged and nothing new: just remove the extra carriers (e.g. old revisions
           // another device flagged deleted but that weren't expunged yet). No new revision.
-          const keepId = Object.entries(state.carriers).find(([, e]) => e.ref === ref && e.rev === latest)![0];
+          const keepId = Object.entries(state.carriers).find(([id, e]) => e.ref === ref && e.rev === latest && !state.unreadable?.[id])![0];
           await deleteCarriers(state, (id, e) => e.ref !== ref || id === keepId);
         }
       }
     } finally {
       await saveState(accountId, state);
     }
-    for (const ref of toPush) schedulePush(ref);
+    for (const ref of toPush) schedulePush(accountId, ref);
     if (changed.length) {
-      for (const ref of changed) await retag(ref);
+      for (const ref of changed) await retag(accountId, ref);
       hooks.changed(changed);
     }
     // Carriers that can't be read: warned about at once and for as long as they are in the
@@ -661,30 +698,67 @@ export function pull(accountId: string): Promise<void> {
   });
 }
 
-// ---- settings: label colours and order (D40) -------------------------------------------------------
+// ---- settings: label colours and order (D40), per account (D42) -------------------------------------
 
+/** Label colours and order per account (D42): Thunderbird's account id → its settings. */
+export const LABEL_SETTINGS_KEY = "labelSettings";
+/** Before D42: one set of label settings for the whole profile. */
 const LABEL_COLOURS_KEY = "labelColours";
 const LABEL_ORDER_KEY = "labelOrder";
 
-/** This device's label colours (merged with every other device's it has seen). */
-export async function getLabelColours(): Promise<LabelColours> {
-  return (await getSettings()).labelColours;
+/**
+ * Every account's label settings. The first time (from the shared settings before D42): every
+ * account starts with the colours and order used so far.
+ */
+export function getAllSettings(): Promise<SettingsByAccount> {
+  return settingsLocked(readAllSettings);
 }
 
-/** This device's settings shared with the others: label colours and order. */
-export async function getSettings(): Promise<Settings> {
-  const stored = await messenger.storage.local.get([LABEL_COLOURS_KEY, LABEL_ORDER_KEY]);
+/**
+ * Reads and writes of the label settings one after another: two accounts' pulls (or a choice made
+ * meanwhile) each wrote the whole map back, and the later write lost the other's merge.
+ */
+let settingsQueue: Promise<unknown> = Promise.resolve();
+function settingsLocked<T>(work: () => Promise<T>): Promise<T> {
+  const next = settingsQueue.then(work, work);
+  settingsQueue = next.catch(() => {});
+  return next;
+}
+
+/** One account's settings changed by `change`, read and written within the lock. */
+function updateSettings(accountId: string, change: (s: Settings) => Settings): Promise<void> {
+  return settingsLocked(async () => {
+    const all = await readAllSettings();
+    const next = change(structuredClone(all[accountId] ?? { version: 1, labelColours: {} }));
+    await messenger.storage.local.set({ [LABEL_SETTINGS_KEY]: { ...all, [accountId]: next } });
+  });
+}
+
+async function readAllSettings(): Promise<SettingsByAccount> {
+  const stored = await messenger.storage.local.get([LABEL_SETTINGS_KEY, LABEL_COLOURS_KEY, LABEL_ORDER_KEY]);
+  const byAccount = stored[LABEL_SETTINGS_KEY];
+  if (byAccount && typeof byAccount === "object") return byAccount as SettingsByAccount;
   const colours = stored[LABEL_COLOURS_KEY];
   const order = stored[LABEL_ORDER_KEY];
-  return {
+  const shared: Settings = {
     version: 1,
     labelColours: colours && typeof colours === "object" ? (colours as LabelColours) : {},
     ...(order && typeof order === "object" ? { labelOrder: order as LabelOrder } : {}),
   };
+  const all: SettingsByAccount = {};
+  if (hasSettings(shared)) for (const a of await messenger.accounts.list(false)) all[a.id] = structuredClone(shared);
+  await messenger.storage.local.set({ [LABEL_SETTINGS_KEY]: all });
+  return all;
 }
 
-async function saveSettings(settings: Settings): Promise<void> {
-  await messenger.storage.local.set({ [LABEL_COLOURS_KEY]: settings.labelColours, ...(settings.labelOrder ? { [LABEL_ORDER_KEY]: settings.labelOrder } : {}) });
+/** One account's label settings (shared by its devices through its settings carrier). */
+export async function getSettings(accountId: string): Promise<Settings> {
+  return (await getAllSettings())[accountId] ?? { version: 1, labelColours: {} };
+}
+
+/** The accounts a choice applies to: those named, else all. */
+async function accountsFor(accountIds: string[] | undefined): Promise<string[]> {
+  return accountIds?.length ? accountIds : (await messenger.accounts.list(false)).map((a) => a.id);
 }
 
 /** What the server is known to have; older versions stored only the colours. */
@@ -694,19 +768,21 @@ function synced(state: AccountState): Settings {
   return "version" in s && (s as Settings).labelColours ? (s as Settings) : { version: 1, labelColours: s as LabelColours };
 }
 
-/** A label's colour chosen here (null: no colour); shown at once, synced a moment later. */
-export async function setLabelColour(label: string, colour: ColourName | null): Promise<void> {
-  const settings = await getSettings();
-  settings.labelColours[label.toLowerCase()] = { colour, updated: new Date().toISOString() };
-  await saveSettings(settings);
+/** A label's colour chosen (null: no colour) in these accounts (none named: all); synced a moment later. */
+export async function setLabelColour(label: string, colour: ColourName | null, accountIds?: string[]): Promise<void> {
+  const updated = new Date().toISOString();
+  for (const accountId of await accountsFor(accountIds)) {
+    await updateSettings(accountId, (s) => ({ ...s, labelColours: { ...s.labelColours, [label.toLowerCase()]: { colour, updated } } }));
+  }
   scheduleSettingsPush();
 }
 
-/** The labels' order chosen here (with the own order, when it changes); synced a moment later. */
-export async function setLabelOrder(mode: LabelOrderMode, custom?: string[]): Promise<void> {
-  const settings = await getSettings();
-  settings.labelOrder = { mode, custom: (custom ?? settings.labelOrder?.custom ?? []).map((l) => l.toLowerCase()), updated: new Date().toISOString() };
-  await saveSettings(settings);
+/** The labels' order chosen in these accounts (none named: all); synced a moment later. */
+export async function setLabelOrder(mode: LabelOrderMode, custom?: string[], accountIds?: string[]): Promise<void> {
+  const updated = new Date().toISOString();
+  for (const accountId of await accountsFor(accountIds)) {
+    await updateSettings(accountId, (s) => ({ ...s, labelOrder: { mode, custom: (custom ?? s.labelOrder?.custom ?? []).map((l) => l.toLowerCase()), updated } }));
+  }
   scheduleSettingsPush();
 }
 
@@ -719,7 +795,7 @@ function scheduleSettingsPush(): void {
   }, PUSH_DELAY_MS);
 }
 
-/** The same settings go to every IMAP account (each has its own ThunderNotes folder). */
+/** Each IMAP account's own settings to its own ThunderNotes folder (D42). */
 async function pushSettingsAll(): Promise<void> {
   for (const account of await messenger.accounts.list(false)) {
     if (account.type !== "imap") continue;
@@ -731,11 +807,11 @@ function pushSettings(accountId: string): Promise<void> {
   return tracked(accountId, async () => {
     const state = await loadState(accountId);
     try {
-      const folder = await carrierFolder(accountId, state, hasSettings(await getSettings()));
+      const folder = await carrierFolder(accountId, state, hasSettings(await getSettings(accountId)));
       if (!folder) return;
       await scan(folder, state);
-      await mergeSettingsCarriers(state); // other devices' choices first, so nothing is overwritten
-      const local = await getSettings();
+      await mergeSettingsCarriers(accountId, state); // other devices' choices first, so nothing is overwritten
+      const local = await getSettings(accountId);
       const current = Object.entries(state.carriers).filter(([, e]) => e.ref === SETTINGS_REF);
       if (!hasSettings(local) || (sameSettings(local, synced(state)) && current.length === 1)) return;
       const carrier = buildSettingsCarrier(local, { client: await clientId() });
@@ -747,6 +823,7 @@ function pushSettings(accountId: string): Promise<void> {
       log(accountId, `uploaded settings to ${folder.path}`);
       state.carriers[carrier.messageId] = { tbId: header.id, ref: SETTINGS_REF, rev: 1, updated: "", client: await clientId(), merged: true };
       state.settingsSynced = local;
+      await saveState(accountId, state); // recorded before the old ones go
       await deleteCarriers(state, (id, e) => e.ref !== SETTINGS_REF || id === carrier.messageId);
     } finally {
       await saveState(accountId, state);
@@ -754,8 +831,8 @@ function pushSettings(accountId: string): Promise<void> {
   });
 }
 
-/** Merges settings carriers not read yet into this device's settings. */
-async function mergeSettingsCarriers(state: AccountState): Promise<void> {
+/** Merges the account's settings carriers not read yet into its settings on this device. */
+async function mergeSettingsCarriers(accountId: string, state: AccountState): Promise<void> {
   for (const [id, entry] of Object.entries(state.carriers)) {
     if (entry.ref !== SETTINGS_REF || entry.merged) continue;
     try {
@@ -764,34 +841,43 @@ async function mergeSettingsCarriers(state: AccountState): Promise<void> {
       if (!part?.partName) throw new Error("settings message without its settings");
       const incoming = parseSettings(await (await messenger.messages.getAttachmentFile(entry.tbId, part.partName)).text());
       state.settingsSynced = mergeSettings(synced(state), incoming);
-      const local = await getSettings();
-      const merged = mergeSettings(local, incoming);
-      if (!sameSettings(merged, local)) await saveSettings(merged);
+      await updateSettings(accountId, (local) => mergeSettings(local, incoming));
     } catch (e) {
       console.warn("ThunderNotes: could not read the settings carrier", e);
       if (isConnectionError(e)) continue; // read it next time
-      state.unreadable = { ...state.unreadable, [id]: { subject: "[ThunderNotes] Settings", reason: String((e as Error)?.message ?? e) } };
+      state.unreadable = { ...state.unreadable, [id]: { subject: "[ThunderNotes] Settings", reason: String((e as Error)?.message ?? e), version: addonVersion() } };
     }
     entry.merged = true;
   }
 }
 
-/** Tags (or untags) every local copy of an email after its notes arrived by sync. */
-async function retag(ref: string): Promise<void> {
-  const set = await getSet(ref);
-  await tagCopies(ref, hasContent(set), CARRIER_FOLDER).catch(() => {});
+/** Tags (or untags) the email's copies in the account after its notes arrived by sync. */
+async function retag(accountId: string, ref: string): Promise<void> {
+  const set = await getSet(accountId, ref);
+  await tagCopies(ref, hasContent(set), CARRIER_FOLDER, accountId).catch(() => {});
 }
 
 /**
  * Sets made before sync (or imported) don't know their account yet: look the email up by
- * Message-ID and take the account of the first copy that isn't a carrier.
+ * Message-ID and take the account of the first copy that isn't a carrier. Imported for an
+ * account by address: that account once it is in Thunderbird, never another (dev issue #4).
  */
 async function assignAccounts(): Promise<void> {
   for (const set of await getAllSets()) {
-    if (set.email.accountId || !hasContent(set)) continue;
-    const list = await messenger.messages.query({ headerMessageId: norm(set.email.messageId) }).catch(() => null);
-    const copy = list?.messages.find((m) => m.folder?.accountId && m.folder.name !== CARRIER_FOLDER);
-    if (copy?.folder?.accountId) await putSet({ ...set, email: { ...set.email, accountId: copy.folder.accountId } });
+    if (set.email.accountId || (!hasContent(set) && !hasDeletions(set))) continue;
+    let accountId: string | undefined;
+    if (set.email.account) {
+      accountId = await accountByAddress(set.email.account);
+    } else {
+      const list = await messenger.messages.query({ headerMessageId: norm(set.email.messageId) }).catch(() => null);
+      accountId = list?.messages.find((m) => m.folder?.accountId && m.folder.name !== CARRIER_FOLDER)?.folder?.accountId;
+    }
+    if (!accountId) continue;
+    // Moved from "no account" to its account (D42); merged should that account have notes on it already.
+    const there = await getSet(accountId, set.email.messageId);
+    const { account: _, ...email } = set.email;
+    const moved = { ...set, email: { ...email, accountId } };
+    await putSet(there ? mergeSets(there, moved, undefined, "import").set : moved, "");
   }
 }
 

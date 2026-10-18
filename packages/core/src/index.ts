@@ -14,7 +14,13 @@ export interface EmailRef {
   from?: string;
   date?: string;
   folderHint?: string;
-  /** Local only (not written to files): the account the email was annotated in, for sync. */
+  /**
+   * The account the notes belong to, by its address (D42): written to exported files, so an
+   * import lands in the matching account on any computer. Not Thunderbird's own id, which differs
+   * between computers.
+   */
+  account?: string;
+  /** Local only (not written to files): Thunderbird's id of the account the notes belong to (D42). */
   accountId?: string;
 }
 
@@ -51,7 +57,11 @@ export interface Annotation {
 }
 
 /** One set per email (D4): one file, one carrier message. */
-/** A deleted annotation, kept so other devices delete it too (D7); dropped after 30 days. */
+/**
+ * A deleted annotation, kept so other devices delete it too (D7): with a copy for 30 days
+ * (restorable, D33), then as a bare record for a year, so a device that was away longer than
+ * the 30 days doesn't bring the note back (design review, issue #1); then dropped.
+ */
 export interface Tombstone {
   id: string;
   deleted: string;
@@ -83,8 +93,11 @@ export interface AnnotationSet {
   tombstones?: Tombstone[];
   /** Synced card folding by annotation id (only with the "sync collapsed notes" setting, D30). */
   folded?: Record<string, FoldState>;
-  /** The whole-email note's text when it was last deleted (emptied), for restoring (D33). */
-  deletedEmailNote?: { md: string; deleted: string };
+  /**
+   * The whole-email note's text when it was last deleted (emptied), for restoring (D33); after
+   * 30 days only the time (`md` gone), kept for a year like tombstones.
+   */
+  deletedEmailNote?: { md?: string; deleted: string };
   /**
    * Copies of what was deleted up to this time are gone for good (purged, D33): on every device,
    * whichever copy a merge brings. The tombstones themselves stay, for the deletions to sync.
@@ -103,6 +116,11 @@ export function hasContent(set: AnnotationSet | null | undefined): boolean {
   return !!set && (set.annotations.length > 0 || !!set.emailNoteMd);
 }
 
+/** Whether a set still records deletions other devices must learn about (so it and its carrier stay). */
+export function hasDeletions(set: AnnotationSet | null | undefined): boolean {
+  return !!set && (!!set.tombstones?.length || !!set.deletedEmailNote);
+}
+
 export * from "./anchoring/normalise.js";
 export * from "./anchoring/dom.js";
 export * from "./anchoring/match.js";
@@ -114,6 +132,7 @@ export * from "./colours.js";
 export * from "./conflict.js";
 export * from "./email-links.js";
 export * from "./tasks.js";
+export { codeLines } from "./markdown-structure.js";
 export * from "./settings.js";
 export * from "./label-colours.js";
 export * from "./label-order.js";

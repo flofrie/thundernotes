@@ -28,6 +28,7 @@ describe("sub-tasks in the task view (D38)", () => {
       runtime: { sendMessage: async () => true, onMessage: { addListener() {} } },
       storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } },
       tabs: { getCurrent: async () => ({ id: 1, windowId: 1 }) },
+      accounts: { list: async () => [] },
       windows: { openDefaultBrowser: async () => {} },
     };
     await import("../src/tasks.js");

@@ -13,6 +13,7 @@
     "package": "npm run build -w @thundernotes/core && npm run package -w @thundernotes/thunderbird --"
   },
   "devDependencies": {
+    "fake-indexeddb": "6.2.5",
     "jsdom": "30.1.1",
     "typescript": "5.9.3",
     "vitest": "5.0.2"

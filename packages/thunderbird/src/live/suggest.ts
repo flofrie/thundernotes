@@ -11,7 +11,7 @@
 
 import { Prec, type EditorState } from "@codemirror/state";
 import { EditorView, ViewPlugin, keymap, type ViewUpdate } from "@codemirror/view";
-import { dateSuggestions, formatDue, labelsIn } from "@thundernotes/core";
+import { dateSuggestions, formatDue, labelsInText } from "@thundernotes/core";
 
 export interface SuggestOptions {
   container: HTMLElement;
@@ -83,7 +83,7 @@ export function suggestions(o: SuggestOptions) {
           }
           // Also labels used in this note so far (not saved yet), except the one being typed.
           const typed = state.doc.sliceString(this.from, this.to);
-          const here = labelsIn(state.doc.sliceString(0, this.from) + " " + state.doc.sliceString(this.to)).filter((l) => `#${l}` !== typed);
+          const here = labelsInText(state.doc.sliceString(0, this.from) + " " + state.doc.sliceString(this.to)).filter((l) => `#${l}` !== typed);
           // One per label regardless of case: the spelling of those used before, else as in this note.
           const seen = new Set<string>();
           this.items = [...(labels ?? []), ...here]

@@ -12,9 +12,7 @@
 import {
   COLOUR_NAMES,
   colourOf,
-  convertLooseDates,
   formatDue,
-  looseDates,
   markDone,
   darker,
   parseConflicts,
@@ -23,7 +21,7 @@ import {
   textOn,
   type Annotation,
   type TextQuoteSelector,
-  taskAt,
+  taskAtLine,
 } from "@thundernotes/core";
 import { EDIT_MENU_CSS, MOD, attachEditMenu, colourItem, labelColourItems, openMenu, type Clipboard, type MenuItem } from "./edit-menu.js";
 import { attachMarkdownHelpers, textareaTarget } from "./editor.js";
@@ -60,6 +58,11 @@ export interface CardActions {
   /** Copies as Markdown (D38's conventions): the task at `line` of the note's text, or the note. */
   copyTask(id: string, md: string, line: number): void;
   copyNote(id: string, md: string): void;
+  /**
+   * The text with its k-th "@" date shaped `text` converted to an ISO date (null: not there):
+   * worked out in the background, which has the Markdown parser (D22).
+   */
+  convertLooseDate(md: string, text: string, k: number): Promise<string | null>;
 }
 
 /** Text typed into a note's editor but never saved (Thunderbird closed or crashed meanwhile). */
@@ -222,6 +225,7 @@ export const CARD_CSS = `
   .preview:empty { display: none; }
   .edit { display: none; } .card.editing .edit { display: block; } .card.editing .view-note { display: none; }
   .fallback { display: none; } .card.fallback .fallback { display: block; } .card.fallback .live { display: none; }
+  .fallback-note { font-size: 11px; font-style: italic; opacity: 0.75; margin: 0 0 4px; }
   .live { min-height: 1.45em; cursor: text; }
   /* Task boxes, rendered note and editor alike (D28); 1.1em + 0.3em = one list marker width: drawn, not characters, so the size is the
      same in every font. Ticked: a green square with a white bold tick that brings its own
@@ -262,6 +266,7 @@ const CARD_TEMPLATE = `
   <div class="edit">
     <div class="live"></div>
     <div class="fallback">
+      <div class="fallback-note">Simple editor: the full editor couldn't be loaded. Your notes are safe; please report this (the reason is in the error console).</div>
       <textarea placeholder="Note in Markdown: **bold**, _italic_, - lists, - [ ] tasks, links. Leave empty for a plain highlight."></textarea>
       <div class="note preview"></div>
     </div>
@@ -435,19 +440,20 @@ export class NoteCard {
       const anchor = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null;
       const href = anchor?.getAttribute("href") ?? "";
       // On an "@" date that isn't ISO yet: convert it (the k-th one with this text in the note).
-      const loose = (e.target as Element).closest?.(".tn-loose-date");
+      // The renderer put the date it would be on it (data-iso).
+      const loose = (e.target as Element).closest?.(".tn-loose-date[data-iso]") as HTMLElement | null;
       const convert: MenuItem[] = [];
       if (loose) {
         const text = loose.textContent ?? "";
-        const k = [...this.note.querySelectorAll(".tn-loose-date")].filter((s) => s.textContent === text).indexOf(loose);
+        const k = [...this.note.querySelectorAll(".tn-loose-date[data-iso]")].filter((s) => s.textContent === text).indexOf(loose);
         const md = this.annotation.bodyMd;
-        const match = looseDates(md).filter((d) => md.slice(d.from, d.to) === text)[k];
-        if (match) {
-          convert.push({
-            label: `Convert to date (${formatDue(match.iso)})`,
-            run: () => this.saveBody(convertLooseDates(md, [match])),
-          });
-        }
+        convert.push({
+          label: `Convert to date (${formatDue(loose.dataset.iso!)})`,
+          run: () =>
+            void this.actions.convertLooseDate(md, text, k).then((changed) => {
+              if (changed !== null && this.annotation.bodyMd === md) this.saveBody(changed);
+            }),
+        });
       }
       // On a label: its colour (D40).
       const label = ((e.target as Element).closest?.(".tn-label") as HTMLElement | null)?.dataset.label;
@@ -461,7 +467,7 @@ export class NoteCard {
         ...(label ? this.labelColourRow(label) : []),
         ...(href ? [{ label: /^mid:/i.test(href) ? "Open email" : "Open link", run: () => this.actions.openLink(href) }] : []),
         ...convert,
-        ...(line !== null && taskAt(md, line)?.text ? [{ label: "Copy task as Markdown", run: () => this.actions.copyTask(this.annotation.id, md, line) }] : []),
+        ...(line !== null && taskAtLine(md, line)?.text ? [{ label: "Copy task as Markdown", run: () => this.actions.copyTask(this.annotation.id, md, line) }] : []),
       ];
       // On a label its colour row replaces the note's (two colour rows were confusing).
       const colours = label ? [] : this.colourItems();
@@ -597,14 +603,17 @@ export class NoteCard {
   }
 
   /** Shows (or hides) the offer to restore unsaved text from an earlier session (D34). */
-  setDraft(draft: Draft | null): void {
+  /** `failed`: the reason saving it failed just now (else: left over from a closed or crashed Thunderbird). */
+  setDraft(draft: Draft | null, failed?: string): void {
     if (this.isEditing) draft = null;
     this.pendingDraft = draft;
     this.el.classList.toggle("has-draft", !!draft);
     if (draft) {
       const at = new Date(draft.at);
       const when = Number.isNaN(at.getTime()) ? "" : ` from ${at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
-      this.el.querySelector(".draft-text")!.textContent = `Unsaved text${when}: Thunderbird closed while you were writing.`;
+      this.el.querySelector(".draft-text")!.textContent = failed
+        ? `Not saved (${failed}). Your text is kept: restore it to try again.`
+        : `Unsaved text${when}: Thunderbird closed while you were writing.`;
     }
     this.events.changed();
   }
@@ -681,7 +690,9 @@ export class NoteCard {
         this.events.changed();
       })
       .catch((e) => {
-        console.warn("ThunderNotes: live editor unavailable, using the plain editor", e);
+        // Said in the card, not only here: a silent downgrade would never be reported.
+        console.error("ThunderNotes: the full editor couldn't be loaded, using the simple one:", e);
+        this.el.querySelector<HTMLElement>(".fallback-note")!.title = `Reason: ${e?.message ?? e}`;
         if (!this.opening) return;
         this.opening = false;
         this.el.classList.add("editing");
@@ -704,10 +715,10 @@ export class NoteCard {
   private endEditing(): string {
     this.opening = false;
     this.disarmEscape();
-    // Saved or discarded: the draft is no longer needed.
+    // The draft stays until the text is saved (saveBody) or discarded (discard): a save that fails
+    // must not take the only copy along (issue #6).
     clearTimeout(this.draftTimer);
     this.startDoc = null;
-    this.actions.draft(this.annotation.id, null);
     const text = this.live ? this.live.getValue() : this.text.value;
     this.live?.destroy();
     this.live = null;
@@ -773,10 +784,11 @@ export class NoteCard {
     if (!this.el.classList.contains("editing")) return;
     const bodyMd = this.endEditing().trim();
     if (bodyMd === this.annotation.bodyMd) {
+      this.actions.draft(this.annotation.id, null); // nothing to save: no draft needed
       this.finish();
       return;
     }
-    this.saveBody(bodyMd);
+    this.saveBody(bodyMd, true);
   }
 
   private escTimer = 0;
@@ -822,36 +834,55 @@ export class NoteCard {
   /** Esc: drop this session's changes; the saved note stays as it was. */
   private discard(): void {
     this.endEditing();
+    this.actions.draft(this.annotation.id, null); // discarded on purpose: the draft goes too
     this.text.blur();
     this.finish();
   }
 
-  private saveBody(bodyMd: string): void {
+  /**
+   * Saves the note's text. From the editor (`fromEditor`), the text is kept as a draft until the
+   * save succeeded; if it fails, the card offers it back to restore and try again (issue #6).
+   */
+  private saveBody(bodyMd: string, fromEditor = false): void {
     this.saving = true;
-    this.run(async () => {
-      await this.actions.save(this.annotation.id, bodyMd);
-      this.annotation = { ...this.annotation, bodyMd };
-      await this.renderInto(this.note, bodyMd);
-    }).finally(() => {
-      this.saving = false;
-      this.finish();
-    });
+    const id = this.annotation.id;
+    if (fromEditor) this.actions.draft(id, bodyMd); // the latest text, before anything can fail
+    let failed = false;
+    this.actions
+      .save(id, bodyMd)
+      .then(async () => {
+        this.annotation = { ...this.annotation, bodyMd };
+        if (fromEditor) this.actions.draft(id, null);
+        await this.renderInto(this.note, bodyMd);
+      })
+      .catch((e) => {
+        console.error("ThunderNotes:", e);
+        failed = true;
+        this.saving = false; // no longer busy: the draft can be offered
+        this.note.textContent = `Could not save: ${e?.message ?? e}`;
+        if (fromEditor) this.setDraft({ text: bodyMd, at: new Date().toISOString() }, String(e?.message ?? e));
+      })
+      .finally(() => {
+        this.saving = false;
+        // Failed with text kept: the card stays (also a new note without saved text), offering it.
+        if (failed && fromEditor) this.events.changed();
+        else this.finish();
+      });
   }
 
-  /** The line of the note's text a checkbox of the rendered note stands for (counted as in toggleTask); null if none. */
+  /** A rendered checkbox names its original source line; never guess from its ordinal position. */
   private taskLine(box: Element): number | null {
     if (box.closest(".tn-conflict-box")) return null;
-    const index = [...this.note.querySelectorAll(".task-box")].filter((b) => !b.closest(".tn-conflict-box")).indexOf(box);
-    let n = -1;
-    const lines = this.annotation.bodyMd.split("\n");
-    const at = lines.findIndex((l) => /^(\s*(?:[-*+]|\d+[.)])\s+)\[([ xX])\]/.test(l) && ++n === index);
-    return at === -1 ? null : at;
+    const value = (box as HTMLElement).dataset.line;
+    if (value === undefined || !/^\d+$/.test(value)) return null;
+    const line = Number(value);
+    return Number.isSafeInteger(line) && line < this.annotation.bodyMd.split("\n").length ? line : null;
   }
 
   /** Editor menus: copy the task on the clicked line (if it is one) or the whole note as Markdown. */
   private copyItems(md: string, line: number | null): MenuItem[] {
     return [
-      ...(line !== null && taskAt(md, line)?.text ? [{ label: "Copy task as Markdown", run: () => this.actions.copyTask(this.annotation.id, md, line) }] : []),
+      ...(line !== null && taskAtLine(md, line)?.text ? [{ label: "Copy task as Markdown", run: () => this.actions.copyTask(this.annotation.id, md, line) }] : []),
       ...(md.trim() ? [{ label: "Copy note as Markdown", run: () => this.actions.copyNote(this.annotation.id, md) }] : []),
     ];
   }
@@ -860,12 +891,12 @@ export class NoteCard {
   private toggleTask(box: Element): void {
     // Tasks inside a conflict box aren't counted (their lines start with ">" in the text).
     if (box.closest(".tn-conflict-box")) return;
-    const index = [...this.note.querySelectorAll(".task-box")].filter((b) => !b.closest(".tn-conflict-box")).indexOf(box);
-    let n = -1;
+    const at = this.taskLine(box);
+    if (at === null) return;
+    const lines = this.annotation.bodyMd.split("\n");
     // Ticked with the date it was finished, unticked without (D38).
-    const bodyMd = this.annotation.bodyMd.replace(/^(\s*(?:[-*+]|\d+[.)])\s+)\[([ xX])\].*$/gm, (all, _lead: string, mark: string) =>
-      ++n === index ? markDone(all, mark === " ") : all
-    );
+    lines[at] = markDone(lines[at]!, /^[\s>]*(?:[-*+]|\d+[.)])\s+\[ \]/.test(lines[at]!)); // its own box open: tick it
+    const bodyMd = lines.join("\n");
     if (bodyMd !== this.annotation.bodyMd) this.saveBody(bodyMd);
   }
 

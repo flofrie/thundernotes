@@ -21,13 +21,20 @@ import {
   orderLabels,
   renderMarkdown,
   senderName,
+  combinedSettings,
+  COLOURS,
+  darker,
+  colourOf,
+  rgba,
   type LabelColours,
   type LabelOrder,
   type LabelOrderMode,
+  type SettingsByAccount,
 } from "@thundernotes/core";
 import { EDIT_MENU_CSS, MOD, attachEditMenu, labelColourItems, openMenu, type MenuItem } from "./edit-menu.js";
 import { hasInvalidRegex, highlightTerms, normaliseFilter } from "./filter-expr.js";
 import { animateFrom, measure } from "./list-motion.js";
+import { IGNORED_KEY, ignoredKey, isIgnored, isMissing, type Ignored } from "./deleted.js";
 import { bracketPath, laneLeftOf, type RowEnd } from "./task-lines.js";
 import { getAllSets } from "./store.js";
 import { type DoneSort, type EmailInfo, type GroupBy, addressOf, collectTasks, labelSpellings, listAsMarkdown, taskAsMarkdown, taskKey, dateFilterLabel, dateFilterWord, inQuote, monthWord, monthWords, groupOf, labelCounts, sections, typedLabel, type Filter, type TaskEntry } from "./task-list.js";
@@ -46,6 +53,7 @@ function loadPrefs(): {
   doneSort?: DoneSort;
   groupBy?: GroupBy;
   doneMode?: DoneMode;
+  account?: string | null;
 } {
   try {
     return JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
@@ -66,6 +74,7 @@ function savePrefs(): void {
         groupBy: filter.groupBy,
         doneMode,
         allLabels,
+        account: accountFilter,
       })
     );
   } catch {
@@ -93,6 +102,26 @@ const filter: Filter & { exclude: string[] } = {
   showDone: prefs.showDone === true,
 };
 applyDoneMode();
+
+// ---- accounts (D42): each task in its account; a filter narrows the view to one ----------------------
+/** Thunderbird's accounts, in its order (for names and for the label colours across accounts). */
+let accounts: { id: string; name: string }[] = [];
+/** The account the view is narrowed to; null: all. */
+let accountFilter: string | null = prefs.account ?? null;
+/** The tasks the view shows: of the chosen account, or all. */
+const inView = () => (accountFilter ? tasks.filter((t) => (t.accountId ?? "") === accountFilter) : tasks);
+/** Accounts that have tasks (the filter and the account names show only with two or more). */
+const accountsWithTasks = () => new Set(tasks.map((t) => t.accountId ?? ""));
+const accountName = (id: string | undefined) => accounts.find((a) => a.id === id)?.name ?? "";
+messenger.accounts
+  .list(false)
+  .then((list) => {
+    accounts = list.map((a) => ({ id: a.id, name: a.name }));
+    applyLabels();
+    render();
+  })
+  .catch(() => {});
+
 /** All label chips shown, not just two lines' worth. */
 let allLabels = prefs.allLabels === true;
 let tasks: TaskEntry[] = [];
@@ -107,9 +136,18 @@ async function load(): Promise<void> {
     return;
   }
   reloadPending = false;
-  tasks = collectTasks(await getAllSets());
+  // Deleted emails are left alone (D43): their tasks aren't listed.
+  const ignored = ((await messenger.storage.local.get(IGNORED_KEY))[IGNORED_KEY] as Ignored | undefined) ?? {};
+  const sets = (await getAllSets()).filter((s) => !isIgnored(ignored, s));
+  // Emails that can't be found (removed by other means, D44): their tasks marked, their notes deletable.
+  missingEmails = new Set(sets.filter((s) => isMissing(ignored, s)).map((s) => ignoredKey(s.email.accountId, s.email.messageId)));
+  tasks = collectTasks(sets);
   render();
 }
+let missingEmails = new Set<string>();
+const emailMissing = (t: TaskEntry) => missingEmails.has(ignoredKey(t.accountId, t.messageId));
+// Opened: emails with notes checked again (in the Trash, deleted, not found); changes come back as a reload.
+void messenger.runtime.sendMessage({ type: "checkEmails" }).catch(() => {});
 
 // The tab's icon and title show the overdue count, as the Tasks button does.
 const ICON = `<path d="M5 3.5h22a1.5 1.5 0 0 1 1.5 1.5v16.5l-7 7H5A1.5 1.5 0 0 1 3.5 27V5A1.5 1.5 0 0 1 5 3.5z" fill="#ffd43b" stroke="#c99a00"/><path d="M28.5 21.5h-5.5a1.5 1.5 0 0 0-1.5 1.5v5.5z" fill="#f0b400" stroke="#c99a00" stroke-linejoin="round"/><rect x="8.5" y="8.5" width="12" height="12" rx="2" fill="#fff" stroke="#5c4300" stroke-width="2"/><path d="M11 14.5l3 3 6.5-7.5" fill="none" stroke="#2b8a3e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -455,18 +493,25 @@ document.addEventListener("keydown", (e) => {
 function renderList(): void {
   applyDoneMode();
   showOverdue(tasks.filter((t) => groupOf(t) === "overdue").length);
+  // An account chosen that has no tasks any more: back to all.
+  if (accountFilter && !accountsWithTasks().has(accountFilter)) {
+    accountFilter = null;
+    applyLabels();
+  }
+  const shown = inView();
+  showMixedColours(shown);
   // The chosen order (D40): by use, A–Z, Z–A or the own one.
-  const byUse = labelCounts(tasks, filter.showDone);
+  const byUse = labelCounts(shown, filter.showDone);
   const ordered = orderLabels(byUse.map((l) => l.label), labelOrder);
   const labels = ordered.map((l) => byUse.find((x) => x.label === l)!);
-  spellings = labelSpellings(tasks);
+  spellings = labelSpellings(shown);
   shownOrder = ordered;
   filter.labelOrder = ordered;
   // A chosen label no longer used anywhere is dropped, so nothing stays filtered invisibly.
   filter.labels = filter.labels.filter((l) => labels.some((x) => x.label === l));
   filter.exclude = filter.exclude.filter((l) => labels.some((x) => x.label === l));
   renderLabels(labels);
-  const groups = sections(tasks, filter, labels.map((l) => l.label));
+  const groups = sections(shown, filter, labels.map((l) => l.label));
   shownSections = groups;
   const out = $("groups");
   out.replaceChildren();
@@ -492,12 +537,12 @@ function renderList(): void {
       h.append(chip);
     } else if (group.email) {
       // The email's subject and sender; a click opens it.
-      const { messageId, sender, date } = group.email;
+      const { accountId, messageId, sender, date } = group.email;
       const open = document.createElement("a");
       open.className = "email-title";
       open.title = "Open the email";
       open.textContent = group.title;
-      open.addEventListener("click", () => void messenger.runtime.sendMessage({ type: "openEmail", messageId }));
+      open.addEventListener("click", () => void messenger.runtime.sendMessage({ type: "openEmail", accountId, messageId }));
       const meta = document.createElement("span");
       meta.className = "email-meta";
       const { senderAddress } = group.email;
@@ -537,7 +582,7 @@ function renderList(): void {
         // Right under its parent: "part of" would only repeat what the indent shows.
         if (task.parentKey && inGroup.has(task.parentKey)) {
           const part = li.querySelector(".partof");
-          if (part?.nextSibling?.textContent === " · ") part.nextSibling.remove();
+          if (part?.previousSibling?.textContent === " · ") part.previousSibling.remove();
           part?.remove();
         }
       });
@@ -572,7 +617,8 @@ function renderLabels(labels: { label: string; count: number }[]): void {
     chip.title =
       (on ? "Included. Click: hide tasks with this label" : not ? "Excluded. Click: off" : "Click: show only tasks with this label") +
       (label === next ? " (Enter in the filter box)" : "") +
-      ". Drag: own order. Right-click: colour, move";
+      ". Drag: own order. Right-click: colour, move" +
+      (mixedColours.has(label) ? `\nColours: ${mixedColours.get(label)}` : "");
     chip.addEventListener("click", () => toggleLabel(label));
     if (typed === null) draggable(chip, label);
     return chip;
@@ -655,7 +701,8 @@ function setOrder(mode: LabelOrderMode, custom?: string[]): void {
   labelOrder = { mode, custom: custom ?? labelOrder?.custom ?? [], updated: new Date().toISOString() };
   // The own order chosen for the first time: the one on screen now.
   if (mode === "custom" && !labelOrder.custom.length) labelOrder.custom = [...shownOrder];
-  void messenger.runtime.sendMessage({ type: "setLabelOrder", mode, custom: labelOrder.custom });
+  // The chosen account's order, else every account's (D42).
+  void messenger.runtime.sendMessage({ type: "setLabelOrder", mode, custom: labelOrder.custom, accountIds: accountFilter ? [accountFilter] : accounts.map((a) => a.id) });
   render();
 }
 
@@ -854,7 +901,20 @@ function toggleLabel(label: string): void {
 // The line below the labels: "Match all | any" (greyed out until two labels are included: then
 // it applies) and "Done hide | show", two switches of one kind, always in their place.
 function renderControls(): void {
+  const withTasks = accountsWithTasks();
+  const accountSwitch =
+    withTasks.size > 1
+      ? [
+          segmented("Account", [
+            { text: "all", title: "Tasks from every account", current: !accountFilter, pick: () => ((accountFilter = null), applyLabels()) },
+            ...accounts
+              .filter((a) => withTasks.has(a.id))
+              .map((a) => ({ text: a.name, title: `Only tasks in notes of ${a.name}`, current: accountFilter === a.id, pick: () => ((accountFilter = a.id), applyLabels()) })),
+          ]),
+        ]
+      : [];
   $("controls").replaceChildren(
+    ...accountSwitch,
     segmented("Group", [
       { text: "due date", title: "Overdue, today, next 7 days, later, no date", current: filter.groupBy === "due", pick: () => (filter.groupBy = "due") },
       { text: "label", title: "One section per label (a task with two labels in both)", current: filter.groupBy === "label", pick: () => (filter.groupBy = "label") },
@@ -942,7 +1002,7 @@ const entries = new WeakMap<Element, { task: TaskEntry; box: HTMLButtonElement }
 
 /** The task's email, with its note open for editing at the task (D38). */
 function openTaskEmail(task: TaskEntry): void {
-  void messenger.runtime.sendMessage({ type: "openEmail", messageId: task.messageId, noteId: task.noteId, line: task.line });
+  void messenger.runtime.sendMessage({ type: "openEmail", accountId: task.accountId, messageId: task.messageId, noteId: task.noteId, line: task.line });
 }
 
 /** A link in a task: emails open in Thunderbird, web addresses in the browser. */
@@ -957,7 +1017,8 @@ function entry(task: TaskEntry, withEmail = true, sectionId = ""): HTMLLIElement
   const li = document.createElement("li");
   li.className = `entry${task.done ? " done" : ""}`;
   // The same task after a redraw (it may sit in more than one section when grouped by label).
-  li.dataset.key = `t:${task.messageId}|${task.noteId}|${task.line}|${sectionId}`;
+  li.dataset.key = `t:${taskKey(task)}|${sectionId}`;
+  li.dataset.account = task.accountId ?? ""; // its labels in its account's colours (D42)
   // The same drawn box as in the email (green with a white tick when done), as a button.
   const box = document.createElement("button");
   box.className = `tn-box${task.done ? " tn-box-done" : ""}`;
@@ -983,23 +1044,6 @@ function entry(task: TaskEntry, withEmail = true, sectionId = ""): HTMLLIElement
   }
   const meta = document.createElement("div");
   meta.className = "meta";
-  // A sub-task: what it is part of (a task: a click selects it; a plain bullet: its text only).
-  if (task.partOf) {
-    const part = document.createElement(task.parentKey ? "a" : "span");
-    part.className = "partof";
-    part.textContent = `↳ part of “${task.partOf.length > 50 ? `${task.partOf.slice(0, 50).trimEnd()}…` : task.partOf}”`;
-    if (task.parentKey) {
-      const key = task.parentKey;
-      part.title = "Select the task this is part of";
-      part.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const parent = rowsOf(key)[0];
-        if (parent) select(parent);
-        else notice("That task isn't shown with the current filter.");
-      });
-    }
-    meta.append(part, " · ");
-  }
   const open = document.createElement("a");
   if (withEmail) {
     const subject = document.createElement("span");
@@ -1015,12 +1059,62 @@ function entry(task: TaskEntry, withEmail = true, sectionId = ""): HTMLLIElement
   }
   open.title = "Open the email, with this note open for editing";
   open.addEventListener("click", () => openTaskEmail(task));
-  meta.append(open);
+  if (emailMissing(task)) {
+    // Removed by other means (D44): nothing to open; its notes can be deleted (right-click).
+    // Removed by other means (D44): nothing to open. Hovering explains, with a link to the
+    // settings, where the notes on that email can be deleted (a menu on a task deleting a whole
+    // note would be unexpected).
+    if (withEmail) meta.append(`${task.subject} – `);
+    const gone = document.createElement("span");
+    gone.className = "missing";
+    gone.tabIndex = 0;
+    gone.textContent = "email not found";
+    // A click on it (or on "settings" in its explanation): straight to the orphaned notes.
+    const toSettings = (e: Event) => {
+      e.stopPropagation();
+      void messenger.runtime.sendMessage({ type: "openOptionsAt", section: "missing", key: ignoredKey(task.accountId, task.messageId) });
+    };
+    gone.addEventListener("click", toSettings);
+    gone.addEventListener("keydown", (e) => e.key === "Enter" && toSettings(e));
+    const tip = document.createElement("span");
+    tip.className = "missing-tip";
+    const link = document.createElement("a");
+    link.textContent = "settings";
+    link.addEventListener("click", toSettings);
+    tip.append("This task comes from a note in an email that's not on the server anymore. The recommended action is to delete the notes that relate to that email in the ", link, ".");
+    gone.append(tip);
+    meta.append(gone);
+  } else meta.append(open);
+  // Its account, when tasks from several are shown (D42).
+  if (!accountFilter && accountsWithTasks().size > 1 && accountName(task.accountId)) {
+    const account = document.createElement("span");
+    account.className = "account";
+    account.textContent = ` · ${accountName(task.accountId)}`;
+    meta.append(account);
+  }
   if (task.quote) {
     const quote = document.createElement("span");
     quote.className = "quote";
     quote.textContent = ` · on “${task.quote.length > 60 ? `${task.quote.slice(0, 60).trimEnd()}…` : task.quote}”`;
     meta.append(quote);
+  }
+  // A sub-task: what it is part of, last, so the email link keeps its place first (a task: a click
+  // selects it; a plain bullet: its text only).
+  if (task.partOf) {
+    const part = document.createElement(task.parentKey ? "a" : "span");
+    part.className = "partof";
+    part.textContent = `↳ part of “${task.partOf.length > 50 ? `${task.partOf.slice(0, 50).trimEnd()}…` : task.partOf}”`;
+    if (task.parentKey) {
+      const key = task.parentKey;
+      part.title = "Select the task this is part of";
+      part.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const parent = rowsOf(key)[0];
+        if (parent) select(parent);
+        else notice("That task isn't shown with the current filter.");
+      });
+    }
+    meta.append(" · ", part);
   }
   body.append(text, meta);
   // The whole note, read-only, below the task (the arrow on the right, or → / ← when selected).
@@ -1121,7 +1215,7 @@ function dateActions(task: TaskEntry, row: HTMLElement, date: string, nth: numbe
 
 /** Sends a change; on success says so with Undo (the task's lines put back), else updates the list. */
 async function applyEdit(task: TaskEntry, edit: TaskEdit, done: string): Promise<void> {
-  const where = { type: "editTask", messageId: task.messageId, noteId: task.noteId, line: task.line };
+  const where = { type: "editTask", accountId: task.accountId, messageId: task.messageId, noteId: task.noteId, line: task.line };
   const result = await messenger.runtime
     .sendMessage<{ before: string[]; after: string[] } | null>({ ...where, raw: task.raw, edit })
     .catch(() => null);
@@ -1270,11 +1364,64 @@ function askInline(target: HTMLElement, kind: "date" | "label", task: TaskEntry,
 
 function send(task: TaskEntry, done: boolean, raw: string): Promise<boolean> {
   return messenger.runtime
-    .sendMessage<boolean>({ type: "setTaskDone", messageId: task.messageId, noteId: task.noteId, line: task.line, raw, done })
+    .sendMessage<boolean>({ type: "setTaskDone", accountId: task.accountId, messageId: task.messageId, noteId: task.noteId, line: task.line, raw, done })
     .catch(() => false);
 }
 
 let noticeTimer = 0;
+/**
+ * Deleting a label (from the label row): asked again, then taken out of every note it is in, in
+ * the account the view is narrowed to or in all (D42), with Undo.
+ */
+/** Asks at the bottom of the page; `yes` runs on the first button. */
+function confirmBar(question: string, yesText: string, yes: () => void): void {
+  const el = $("notice");
+  clearTimeout(noticeTimer);
+  const ok = document.createElement("button");
+  ok.className = "undo";
+  ok.textContent = yesText;
+  const no = document.createElement("button");
+  no.className = "undo";
+  no.textContent = "Cancel";
+  el.replaceChildren(question, " ", ok, " ", no);
+  el.style.display = "block";
+  no.addEventListener("click", () => (el.style.display = "none"));
+  ok.addEventListener("click", () => {
+    el.style.display = "none";
+    yes();
+  });
+  ok.focus();
+}
+
+function confirmDeleteLabel(label: string): void {
+  const where = accountFilter ? `in ${accountName(accountFilter) || "this account"}` : "in all accounts";
+  const count = inView().filter((t) => t.labels.some((l) => l.toLowerCase() === label)).length;
+  const el = $("notice");
+  clearTimeout(noticeTimer);
+  const yes = document.createElement("button");
+  yes.className = "undo";
+  yes.textContent = "Delete";
+  const no = document.createElement("button");
+  no.className = "undo";
+  no.textContent = "Cancel";
+  el.replaceChildren(`Delete #${spelled(label)} from every note it is in, ${where}${count ? ` (${count} task${count === 1 ? "" : "s"})` : ""}?`, " ", yes, " ", no);
+  el.style.display = "block";
+  no.addEventListener("click", () => (el.style.display = "none"));
+  yes.addEventListener("click", async () => {
+    el.style.display = "none";
+    const accountIds = accountFilter ? [accountFilter] : undefined;
+    const result = await messenger.runtime.sendMessage<{ emails: number; changes: unknown[] }>({ type: "deleteLabel", label, accountIds }).catch(() => null);
+    if (!result) return notice("The label couldn't be deleted.");
+    filter.labels = filter.labels.filter((l) => l !== label);
+    filter.exclude = filter.exclude.filter((l) => l !== label);
+    savePrefs();
+    notice(`#${spelled(label)} deleted from ${result.changes.length} note${result.changes.length === 1 ? "" : "s"} on ${result.emails} email${result.emails === 1 ? "" : "s"}.`, () =>
+      void messenger.runtime.sendMessage({ type: "restoreNotes", changes: result.changes })
+    );
+  });
+  yes.focus();
+}
+
 function notice(message: string, undo?: () => void): void {
   const el = $("notice");
   el.replaceChildren(message);
@@ -1683,14 +1830,59 @@ const menuStyle = document.createElement("style");
 menuStyle.textContent = EDIT_MENU_CSS;
 const labelStyle = document.createElement("style");
 document.head.append(menuStyle, labelStyle);
+// Per account (D42): a task's labels in its account's colours; the label row and headings in
+// those of the first account (Thunderbird's order) that has a choice, or of the chosen account.
+let labelSettings: SettingsByAccount = {};
 let labelColours: LabelColours = {};
-function applyLabelColours(value: unknown): void {
-  labelColours = (value as LabelColours | undefined) ?? {};
-  labelStyle.textContent = labelColourCss(labelColours);
+function applyLabels(): void {
+  const scope = accountFilter ? [accountFilter] : accounts.map((a) => a.id);
+  const combined = combinedSettings(labelSettings, scope);
+  labelColours = combined.labelColours;
+  labelOrder = combined.labelOrder;
+  labelStyle.textContent = [
+    labelColourCss(labelColours, "#labels"),
+    labelColourCss(labelColours, "#groups h2"),
+    ...Object.entries(labelSettings).map(([id, s]) => labelColourCss(s.labelColours, `li.entry[data-account="${CSS.escape(id)}"]`)),
+  ].join("\n");
 }
-messenger.storage.local.get("labelColours").then((s) => applyLabelColours(s.labelColours));
-messenger.storage.local.get("labelOrder").then((s) => {
-  labelOrder = (s.labelOrder as LabelOrder | undefined) ?? undefined;
+/**
+ * A label coloured differently in the accounts shown (D42): its chip at the top and in headings
+ * split into side-by-side segments, one per distinct colour in account order (at most four; an
+ * account where it has no colour a neutral one), and its tooltip saying whose is which.
+ */
+const mixedStyle = document.createElement("style");
+document.head.append(mixedStyle);
+let mixedColours = new Map<string, string>();
+function showMixedColours(shown: TaskEntry[]): void {
+  const using = new Map<string, Set<string>>();
+  for (const t of shown) for (const l of t.labels) using.set(l.toLowerCase(), (using.get(l.toLowerCase()) ?? new Set()).add(t.accountId ?? ""));
+  const rules: string[] = [];
+  mixedColours = new Map();
+  for (const [label, ids] of using) {
+    const inOrder = accounts.map((a) => a.id).filter((id) => ids.has(id));
+    if (inOrder.length < 2) continue;
+    const colours = inOrder.map((id) => labelSettings[id]?.labelColours[label]?.colour ?? null);
+    const distinct = colours.filter((c, i) => colours.indexOf(c) === i).slice(0, 4);
+    if (distinct.length < 2) continue;
+    const step = 100 / distinct.length;
+    const stops = distinct.map((c, i) => `${c ? rgba(colourOf(c), 0.3) : "var(--chip)"} ${i * step}% ${(i + 1) * step}%`).join(", ");
+    const border = distinct.find((c) => c);
+    const sel = `[data-label="${CSS.escape(label)}"]`;
+    rules.push(`#labels .label-chip.label-chip${sel}, #groups h2 .tn-chip.tn-label${sel} { background: linear-gradient(90deg, ${stops}); ${border ? `border-color: ${darker(colourOf(border))};` : ""} }`);
+    mixedColours.set(label, inOrder.map((id, i) => `${accountName(id) || "?"}: ${colours[i] ? COLOURS[colourOf(colours[i]).name].label.toLowerCase() : "no colour"}`).join(", "));
+  }
+  mixedStyle.textContent = rules.join("\n");
+}
+
+/** The colour a label has for a task (its account's), or in the label row. */
+const colourIn = (label: string, accountId?: string) =>
+  (accountId !== undefined ? labelSettings[accountId]?.labelColours[label] : labelColours[label])?.colour ?? null;
+/** The accounts a choice in the label row applies to: the chosen one, else every account using the label. */
+const accountsUsing = (label: string) =>
+  accountFilter ? [accountFilter] : [...new Set(tasks.filter((t) => t.labels.some((l) => l.toLowerCase() === label)).map((t) => t.accountId ?? "").filter(Boolean))];
+messenger.storage.local.get("labelSettings").then((s) => {
+  labelSettings = (s.labelSettings as SettingsByAccount | undefined) ?? {};
+  applyLabels();
   render();
 });
 // Right-click: our own menu instead of Thunderbird's page menu (Back, Reload …), which has
@@ -1705,7 +1897,11 @@ document.addEventListener("contextmenu", (e) => {
   const found = inTask ? entries.get(inTask) : undefined;
   if (chip) {
     const label = chip.dataset.label!;
-    const colour = labelColourItems(label, labelColours[label]?.colour ?? null, (c) => void messenger.runtime.sendMessage({ type: "setLabelColour", label, colour: c }));
+    // In a task: that task's account; in the label row or a heading: the accounts using it (D42).
+    const own = inTask ? entries.get(inTask)?.task.accountId : undefined;
+    const colour = labelColourItems(label, colourIn(label, own), (c) =>
+      void messenger.runtime.sendMessage({ type: "setLabelColour", label, colour: c, accountIds: own ? [own] : accountsUsing(label) })
+    );
     if (found) {
       // A label in a task: about this label here, its colour, or out of this task.
       const { task } = found;
@@ -1722,6 +1918,7 @@ document.addEventListener("contextmenu", (e) => {
       { label: "Move to front", separator: true, enabled: at > 0, run: () => placeLabel(label, 0) },
       { label: "Move left", enabled: at > 0, run: () => placeLabel(label, at - 1) },
       { label: "Move right", enabled: at >= 0 && at < shownOrder.length - 1, run: () => placeLabel(label, at + 1) },
+      { label: "Delete label…", danger: true, separator: true, run: () => confirmDeleteLabel(label) },
     ]);
     return;
   }
@@ -1805,10 +2002,12 @@ messenger.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && "tasksStickyTop" in changes) applySticky(changes.tasksStickyTop!.newValue);
   if (area === "local" && "tasksAnimate" in changes) animate = changes.tasksAnimate!.newValue !== false;
   if (area === "local" && "tasksKeepOnTick" in changes) keepOnTick = changes.tasksKeepOnTick!.newValue === true;
-  if (area === "local" && "labelColours" in changes) applyLabelColours(changes.labelColours!.newValue);
   // Chosen on another device (sync) or stored after a choice here.
-  if (area === "local" && "labelOrder" in changes) {
-    labelOrder = changes.labelOrder!.newValue as LabelOrder | undefined;
+  // An email moved to the Trash or back (D43): its tasks go or come back.
+  if (area === "local" && IGNORED_KEY in changes) void load();
+  if (area === "local" && "labelSettings" in changes) {
+    labelSettings = (changes.labelSettings!.newValue as SettingsByAccount | undefined) ?? {};
+    applyLabels();
     render();
   }
 });

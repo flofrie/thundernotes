@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 import { describe, expect, it } from "vitest";
-import { preferredSpellings, convertLooseDates, dateSuggestions, editTask, setAlwaysShowYear, formatDue, isOverdue, labelsIn, isValidDate, looseDates, markDone, parseDateWord, setTaskDone, taskAt, tasksIn } from "../src/index.js";
+import { preferredSpellings, convertLooseDates, dateSuggestions, editTask, setAlwaysShowYear, formatDue, isOverdue, labelsIn, isValidDate, looseDates, markDone, parseDateWord, setTaskDone, taskAt, taskAtLine, tasksIn, removeLabelFromNote, labelsInText, looseDatesInText } from "../src/index.js";
 
 const today = new Date(2026, 9, 16); // Fri 16 Oct 2026
 
@@ -250,5 +250,31 @@ describe("sub-tasks (the item a task is indented under)", () => {
   });
   it("has none once the list ended", () => {
     expect(byText["after text"]).toBeUndefined();
+  });
+});
+
+describe("removeLabelFromNote (a label deleted everywhere)", () => {
+  it("takes the label out wherever it is, in any case, closing up the text", () => {
+    const md = "- [ ] call Anna #Urgent today\n- [ ] #urgent first\nNote #urgent\n- [ ] keep #urgently and #other";
+    expect(removeLabelFromNote(md, "urgent")).toBe("- [ ] call Anna today\n- [ ] first\nNote\n- [ ] keep #urgently and #other");
+  });
+  it("leaves code blocks alone", () => {
+    const md = "```\n#urgent in code\n```\ntext #urgent";
+    expect(removeLabelFromNote(md, "urgent")).toBe("```\n#urgent in code\n```\ntext");
+  });
+});
+
+// D22: helpers for the message display script, which has no Markdown parser.
+describe("parser-free helpers", () => {
+  it("find the task on a line from the lines' shape, as taskAt does outside code", () => {
+    const md = "- [ ] send offer\n  to Anna\n- [ ]\ntext";
+    for (const line of [0, 1, 2, 3]) expect(taskAtLine(md, line)?.text ?? null).toEqual(taskAt(md, line)?.text ?? null);
+    expect(taskAtLine(md, 1)?.text).toBe("send offer to Anna");
+    // In code only the parser knows: the caller (a rendered box, the editor's syntax tree) rules that out.
+    expect(taskAt("```\n- [ ] x\n```", 1)).toBeNull();
+  });
+  it("read labels and @ dates in a piece of text", () => {
+    expect(labelsInText("#a and #b, #a")).toEqual(["a", "b"]);
+    expect(looseDatesInText("call @24.10.27", new Date("2026-10-18T12:00:00")).map((d) => d.iso)).toEqual(["2027-10-24"]);
   });
 });

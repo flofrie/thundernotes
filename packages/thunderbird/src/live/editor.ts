@@ -18,11 +18,11 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, isolateHistory } from "@codemirror/commands";
-import { Language, defineLanguageFacet, syntaxTree } from "@codemirror/language";
+import { Language, defineLanguageFacet, ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { Autolink, Strikethrough, TaskList, parser } from "@lezer/markdown";
 import { cycleTask, expandTaskShortcut, toggleBullets, toggleChecklist, toggleNumbered } from "../checklist.js";
 import { MOD, attachEditMenu, opensLink, type Clipboard, type MenuItem } from "../edit-menu.js";
-import { DONE_DATE, DUE_DATE, LABEL, formatDue, isOverdue, isValidDate, looseDates, markDone, parseDateWord, setAlwaysShowYear } from "@thundernotes/core";
+import { DONE_DATE, DUE_DATE, LABEL, formatDue, isOverdue, isValidDate, looseDatesInText, markDone, parseDateWord, setAlwaysShowYear } from "@thundernotes/core";
 import { isUrl, linkForPaste, markdownLink, splitForLink, webUrl } from "../links.js";
 import type { EmailCandidate } from "../protocol.js";
 import { openLinkPicker } from "./link-picker.js";
@@ -610,7 +610,7 @@ function buildDecorations(view: EditorView): DecorationSet {
         if (!inLinkOrCode(start)) ranges.push(labelChip(m[2]!).range(start, start + 1 + m[2]!.length));
       }
       // "@" dates that aren't ISO yet: dotted, saying what they would mean (right-click converts).
-      for (const d of looseDates(l.text)) {
+      for (const d of looseDatesInText(l.text)) {
         if (inLinkOrCode(l.from + d.from)) continue;
         const title = `Not a date reference yet: would be ${formatDue(d.iso)}. Right-click → Convert to date.`;
         ranges.push(Decoration.mark({ class: "cm-tn-loose-date", attributes: { title } }).range(l.from + d.from, l.from + d.to));
@@ -1337,13 +1337,23 @@ export function createLiveEditor(o: LiveEditorOptions): LiveEditor {
         // Pasted text with "@" number dates (@24.10.27): pasted, then the dates turned into ISO
         // dates as their own undo step (Cmd+Z keeps them as pasted). Words (@freitag) are left:
         // they meant a day relative to when they were written.
-        const text = e.clipboardData?.getData("text/plain") ?? "";
-        const dates = text.includes("@") && !inCode(view.state, r.from) ? looseDates(text).filter((d) => d.numeric) : [];
+        const text = (e.clipboardData?.getData("text/plain") ?? "").replace(/\r\n?/g, "\n");
+        const dates = text.includes("@") ? looseDatesInText(text).filter((d) => d.numeric) : [];
         if (!dates.length) return false;
         e.preventDefault();
         view.dispatch(view.state.replaceSelection(text), { userEvent: "input.paste", scrollIntoView: true });
-        view.dispatch({
-          changes: dates.map((d) => ({ from: r.from + d.from, to: r.from + d.to, insert: `@${d.iso}` })),
+        // The clipboard can contain its own code blocks, or close an existing one. Inspect
+        // the inserted document, not just the old insertion point. If parsing exceeds the
+        // budget, preserve the paste as-is rather than guessing which dates are prose.
+        const tree = ensureSyntaxTree(view.state, r.from + text.length, 50);
+        const prose = tree ? dates.filter((d) => {
+          for (let node: typeof tree.topNode | null = tree.resolveInner(r.from + d.from, 1); node; node = node.parent) {
+            if (node.name === "FencedCode" || node.name === "CodeBlock" || node.name === "InlineCode") return false;
+          }
+          return true;
+        }) : [];
+        if (prose.length) view.dispatch({
+          changes: prose.map((d) => ({ from: r.from + d.from, to: r.from + d.to, insert: `@${d.iso}` })),
           annotations: isolateHistory.of("before"),
           userEvent: "input.autocorrect",
         });
@@ -1407,7 +1417,7 @@ export function createLiveEditor(o: LiveEditorOptions): LiveEditor {
       // On an "@" date that isn't ISO yet: convert it.
       if (pos !== null) {
         const line = view.state.doc.lineAt(pos);
-        const loose = looseDates(line.text).find((d) => pos >= line.from + d.from && pos <= line.from + d.to);
+        const loose = inCode(view.state, pos) ? undefined : looseDatesInText(line.text).find((d) => pos >= line.from + d.from && pos <= line.from + d.to);
         if (loose) {
           here.push({
             label: `Convert to date (${formatDue(loose.iso)})`,
@@ -1430,7 +1440,8 @@ export function createLiveEditor(o: LiveEditorOptions): LiveEditor {
       const bare = pos === null ? null : bareUrlAt(view.state, pos);
       if (bare) here.push({ label: "Turn link into Markdown format", run: () => linkifyRange(view, bare) });
       // Copy the task on this line (anywhere on it) or the note as Markdown (D38's conventions).
-      here.push(...(o.copyMenuItems?.(view.state.doc.toString(), pos === null ? null : view.state.doc.lineAt(pos).number - 1) ?? []));
+      // Not in code (this editor knows it; the card's check reads only the lines' shape).
+      here.push(...(o.copyMenuItems?.(view.state.doc.toString(), pos === null || inCode(view.state, pos) ? null : view.state.doc.lineAt(pos).number - 1) ?? []));
       if (colours.length && here.length) here[0] = { ...here[0]!, separator: true };
       const items = [...colours, ...here];
       return items;

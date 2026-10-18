@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+import { codeLines, taskSourceLines } from "./markdown-structure.js";
+
 /**
  * Tasks (D38): every checklist item is a task, with an optional due date `@2026-10-24` and any
  * number of labels `#name` (labels work in all notes). The file always holds ISO dates; people
@@ -226,16 +228,36 @@ export function preferredSpellings(occurrences: Iterable<string>): Map<string, s
   return out;
 }
 
-/** Labels used in a note's text (without `#`), in order of appearance. */
+/** Labels used in a note's text (without `#`), in order of appearance; not in code blocks. */
 export function labelsIn(md: string): string[] {
+  const code = codeLines(md);
+  return labelsInText(md.split("\n").filter((_, i) => !code.has(i)).join("\n"));
+}
+
+/**
+ * Labels in a piece of text whatever it is (a task's text, the editor's own lines, whose code it
+ * knows itself): no Markdown parser, so the message display script stays small (D22).
+ */
+export function labelsInText(text: string): string[] {
   const out: string[] = [];
-  let inFence = false;
-  for (const line of md.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
-    if (inFence || /^\s*(```|~~~)/.test(line)) continue;
-    for (const m of line.matchAll(LABEL)) if (!out.includes(m[2]!)) out.push(m[2]!);
-  }
+  for (const m of text.matchAll(LABEL)) if (!out.includes(m[2]!)) out.push(m[2]!);
   return out;
+}
+
+/**
+ * A note's text with a label taken out everywhere (case ignored), not in code blocks: "#x " goes
+ * with its space, so the text closes up; the label's own place in a heading or list stays.
+ */
+export function removeLabelFromNote(md: string, label: string): string {
+  const re = new RegExp(`(^|[\\s([])#${label.replace(/^#/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_/-])[ \\t]?`, "giu");
+  const code = codeLines(md);
+  return md
+    .split("\n")
+    .map((line, i) => {
+      if (code.has(i)) return line;
+      return line.replace(re, (_all, lead: string) => lead).replace(/[ \t]+$/, "");
+    })
+    .join("\n");
 }
 
 /** A date after "@" that isn't ISO yet (D38): typed and kept, pasted, or written elsewhere. */
@@ -257,12 +279,19 @@ const LOOSE = /(^|[^\p{L}\p{N}_@.])@([\p{L}\p{N}.-]+)/gu;
  * sentence unless it belongs to the date ("24.10.").
  */
 export function looseDates(md: string, today = new Date()): LooseDate[] {
+  return looseDatesOutside(md, today, codeLines(md));
+}
+
+/** As looseDates, in a piece of text whose code is known otherwise (an editor's line, a rendered text run). */
+export function looseDatesInText(text: string, today = new Date()): LooseDate[] {
+  return looseDatesOutside(text, today, new Set());
+}
+
+function looseDatesOutside(md: string, today: Date, code: Set<number>): LooseDate[] {
   const out: LooseDate[] = [];
   let offset = 0;
-  let inFence = false;
-  for (const line of md.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
-    if (!inFence && !/^\s*(```|~~~)/.test(line)) {
+  for (const [i, line] of md.split("\n").entries()) {
+    if (!code.has(i)) {
       for (const m of line.matchAll(LOOSE)) {
         const raw = m[2]!;
         const word = /^\d{1,2}\.\d{1,2}\.$/.test(raw) ? raw : raw.replace(/\.$/, "");
@@ -330,10 +359,8 @@ export interface TaskItem {
 
 const TASK_LINE = /^(\s*(?:>\s?)*)(\s*)(?:[-*+]|\d+[.)])\s+\[([ xX])\](?:\s+(.*))?$/;
 const LIST_LINE = /^\s*(?:>\s?)*\s*(?:[-*+]|\d+[.)])\s/;
-const FENCE = /^\s*(?:>\s?)*\s*(```|~~~)/;
-
-/** The line after a task's block: its own line and the indented lines that continue its text. */
-function blockEnd(lines: string[], at: number): number {
+/** The line after a task's block: its own line and the indented lines that continue its text (not code). */
+function blockEnd(lines: string[], at: number, code: Set<number>): number {
   const m = TASK_LINE.exec(lines[at]!);
   if (!m) return at + 1;
   const indent = m[2]!.length;
@@ -341,7 +368,7 @@ function blockEnd(lines: string[], at: number): number {
   for (; j < lines.length; j++) {
     const next = lines[j]!;
     const rest = next.slice(m[1]!.length);
-    if (!next.startsWith(m[1]!) || !rest.trim() || LIST_LINE.test(next) || FENCE.test(next) || /^\s*/.exec(rest)![0].length <= indent) break;
+    if (!next.startsWith(m[1]!) || !rest.trim() || LIST_LINE.test(next) || code.has(j) || /^\s*/.exec(rest)![0].length <= indent) break;
   }
   return j;
 }
@@ -353,14 +380,14 @@ const ITEM_LINE = /^(\s*)(?:[-*+]|\d+[.)])\s+(?:\[([ xX])\](?:\s+|$))?(.*)$/;
  * nearest list item above it that is indented less, over blank lines, deeper items and their
  * text; none once the list ends (a line of text not indented under it, another quote level).
  */
-function parentItem(lines: string[], at: number, quote: string, indent: number): TaskItem["parent"] | undefined {
+function parentItem(lines: string[], at: number, quote: string, indent: number, code: Set<number>): TaskItem["parent"] | undefined {
   if (indent === 0) return undefined;
   for (let i = at - 1; i >= 0; i--) {
     const line = lines[i]!;
     if (!line.startsWith(quote)) return undefined;
     const rest = line.slice(quote.length);
     if (!rest.trim()) continue;
-    if (FENCE.test(line)) return undefined;
+    if (code.has(i)) return undefined;
     const own = /^\s*/.exec(rest)![0].length;
     const item = ITEM_LINE.exec(rest);
     if (item && own < indent) return { line: i, text: item[3]!.trim(), task: item[2] !== undefined };
@@ -381,36 +408,52 @@ function locate(lines: string[], task: { line: number; raw: string }): number {
  * the indented lines after it (not its sub-items, which are items of their own).
  */
 export function tasksIn(md: string): TaskItem[] {
+  return findTasks(md, codeLines(md), taskSourceLines(md));
+}
+
+/**
+ * The checklist items in lines whose code is `code`; only those at `taskLines` (what the
+ * renderer draws as boxes), else every line shaped like one.
+ */
+function findTasks(md: string, code: Set<number>, taskLines?: Set<number>): TaskItem[] {
   const lines = md.split("\n");
   const out: TaskItem[] = [];
-  let inFence = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    if (FENCE.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
+    if (code.has(i) || (taskLines && !taskLines.has(i))) continue;
     const m = TASK_LINE.exec(line);
     if (!m) continue;
-    const parts = [m[4] ?? "", ...lines.slice(i + 1, blockEnd(lines, i)).map((l) => l.slice(m[1]!.length).trim())];
+    const parts = [m[4] ?? "", ...lines.slice(i + 1, blockEnd(lines, i, code)).map((l) => l.slice(m[1]!.length).trim())];
     const text = parts.join(" ").trim();
     // Impossible dates (month 13 …) are text, not dates.
     const dates = [...new Set([...text.matchAll(new RegExp(DUE_DATE.source, "gu"))].map((d) => d[2]!).filter(isValidDate))].sort();
     const doneOn = [...text.matchAll(new RegExp(DONE_DATE.source, "gu"))].map((d) => d[1]!).find(isValidDate);
     // The quote markers, then the indentation (TASK_LINE's first group takes both).
     const quote = /^(?:\s*>\s?)*/.exec(line)![0];
-    const parent = parentItem(lines, i, quote, m[1]!.length + m[2]!.length - quote.length);
-    out.push({ line: i, raw: line, text, done: m[3] !== " ", dates, labels: labelsIn(text), ...(doneOn ? { doneOn } : {}), ...(parent ? { parent } : {}) });
+    const parent = parentItem(lines, i, quote, m[1]!.length + m[2]!.length - quote.length, code);
+    out.push({ line: i, raw: line, text, done: m[3] !== " ", dates, labels: labelsInText(text), ...(doneOn ? { doneOn } : {}), ...(parent ? { parent } : {}) });
   }
   return out;
 }
 
 /** The checklist item whose lines (its own and those continuing its text) include `line`; null if none. */
 export function taskAt(md: string, line: number): TaskItem | null {
-  const lines = md.split("\n");
-  const task = tasksIn(md).filter((t) => t.line <= line).pop();
-  return task && line < blockEnd(lines, task.line) ? task : null;
+  const code = codeLines(md);
+  return taskAmong(md, line, findTasks(md, code, taskSourceLines(md)), code);
+}
+
+/**
+ * As taskAt, from the lines' shape alone (no Markdown parser): for menus in the message display
+ * script, which stays small (D22). Its caller knows the line isn't code (a rendered checkbox, the
+ * editor's own syntax tree); the background checks again with taskAt before acting.
+ */
+export function taskAtLine(md: string, line: number): TaskItem | null {
+  return taskAmong(md, line, findTasks(md, new Set()), new Set());
+}
+
+function taskAmong(md: string, line: number, tasks: TaskItem[], code: Set<number>): TaskItem | null {
+  const task = tasks.filter((t) => t.line <= line).pop();
+  return task && line < blockEnd(md.split("\n"), task.line, code) ? task : null;
 }
 
 /**
@@ -455,7 +498,7 @@ export function editTask(
   const lines = md.split("\n");
   const at = locate(lines, edit.kind === "restore" ? { line: task.line, raw: edit.current[0]! } : task);
   if (at < 0) return null;
-  const end = edit.kind === "restore" ? at + edit.current.length : blockEnd(lines, at);
+  const end = edit.kind === "restore" ? at + edit.current.length : blockEnd(lines, at, codeLines(lines.join("\n")));
   const before = lines.slice(at, end);
   if (edit.kind === "restore" && before.join("\n") !== edit.current.join("\n")) return null;
   let after = [...before];
@@ -473,7 +516,7 @@ export function editTask(
     after = replaceDate(edit.from, edit.nth, () => "", true);
   } else if (edit.kind === "addLabel") {
     const label = edit.label.replace(/^#/, "");
-    if (!labelsIn(before.join(" ")).some((l) => l.toLowerCase() === label.toLowerCase())) after = [append(after[0]!, `#${label}`), ...after.slice(1)];
+    if (!labelsInText(before.join(" ")).some((l) => l.toLowerCase() === label.toLowerCase())) after = [append(after[0]!, `#${label}`), ...after.slice(1)];
   } else if (edit.kind === "removeLabel") {
     const re = new RegExp(`(^|[\\s([])#${escapeRe(edit.label.replace(/^#/, ""))}${NOT_WORD}`, "giu");
     after = after.map((l) => l.replace(re, (_all, lead: string) => (/\s/.test(lead) ? "" : lead)));

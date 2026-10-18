@@ -34,7 +34,9 @@ manifest_version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' packages/thunder
   { echo "publish: $PUBLIC_REPO isn't a public repository of its own (a redirect?)" >&2; exit 1; }
 
 # The public repo's last release, if any (nothing yet: this one becomes its first commit).
+# Without its tags: the public v<version> tags point at public commits, the private ones at private commits.
 git remote get-url public >/dev/null 2>&1 || git remote add public "$PUBLIC_URL"
+git config remote.public.tagOpt --no-tags
 parent=""
 if git ls-remote --exit-code --heads public main >/dev/null 2>&1; then
   git fetch -q public main
