@@ -26,14 +26,14 @@ but aren't synced (export is their backup).
 
 ## Privacy and encrypted email
 
-ThunderNotes stores notes and highlighting information as plain text in the Thunderbird profile,
-exports, and—in an IMAP account—the account's `ThunderNotes` folder. Highlighting a passage copies
-the exact text and nearby context into that data. On an S/MIME- or OpenPGP-encrypted email, this is
+ThunderNotes stores notes and highlighting information as plain text in your Thunderbird profile,
+exports, and—in your IMAP account—the account's `ThunderNotes` folder. Highlighting a passage copies
+the exact text of that passage and nearby context into that data. On an S/MIME- or OpenPGP-encrypted email, this is
 decrypted content and the carrier that syncs it is **not** encrypted like the original message.
 
 ThunderNotes does not currently detect encrypted messages or warn per message. Do not annotate an
-encrypted email if its decrypted text must not be stored in the Thunderbird profile, an export, or
-as a plain carrier on the mail server.
+encrypted email if its decrypted text must not be stored in your Thunderbird profile, an export you make, or
+as a plain carrier on the mail server you use.
 
 ## Install
 
