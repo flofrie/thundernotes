@@ -173,6 +173,30 @@ afterEach(() => {
 });
 
 describe("IMAP sync between two devices", () => {
+  it("shows failed carrier-folder preparation in sync status and retries it", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    await A.act(() => A.store.putSet(initialSet("2026-10-15T10:00:00.000Z")));
+    let fail = true;
+    let attempts = 0;
+    A.messenger.thundernotes.prepareCarrierFolder = async () => {
+      attempts++;
+      if (fail) throw new Error("Experiment API unavailable");
+    };
+
+    await A.act(() => A.sync.pull(ACCOUNT));
+    const [warned] = await A.act(() => A.sync.syncStatus());
+    expect(warned?.experimentProblem?.message).toBe("Experiment API unavailable");
+    expect(await A.store.getSet(ACCOUNT, REF)).not.toBeNull(); // local notes remain usable
+    expect(attempts).toBeGreaterThanOrEqual(1);
+
+    fail = false;
+    await A.act(() => A.sync.pull(ACCOUNT));
+    const [recovered] = await A.act(() => A.sync.syncStatus());
+    expect(recovered?.experimentProblem).toBeUndefined();
+    expect(attempts).toBeGreaterThan(1);
+  });
+
   it("pushes, pulls, deletes and merges concurrent edits", async () => {
     const server = makeServer();
     const A = await device(server);
@@ -230,6 +254,43 @@ describe("IMAP sync between two devices", () => {
     expect(notes(await B.store.getSet(ACCOUNT, REF))).toEqual(["a1:edited on A", "a3:also from B"]);
     await A.act(() => A.sync.pull(ACCOUNT));
     expect(notes(await A.store.getSet(ACCOUNT, REF))).toEqual(["a1:edited on A", "a3:also from B"]);
+  });
+
+  it("uploads a local change when another device replaces its carrier with the same revision", async () => {
+    const server = makeServer();
+    const A = await device(server);
+    const B = await device(server);
+    await A.act(async () => {
+      await A.store.putSet(initialSet("2026-10-15T10:00:00.000Z"));
+      A.sync.schedulePush(ACCOUNT, REF);
+    });
+    await B.act(() => B.sync.pull(ACCOUNT));
+
+    // A edits locally but hasn't pushed yet. B independently writes revision 2 with the old
+    // note text, replacing the carrier that represented A's last uploaded state.
+    await A.act(async () => {
+      const set = (await A.store.getSet(ACCOUNT, REF))!;
+      const at = "2026-10-15T10:05:00.000Z";
+      await A.store.putSet({
+        ...set,
+        rev: 2,
+        updated: at,
+        annotations: set.annotations.map((a) => ({ ...a, bodyMd: "local edit on A", updated: at })),
+      });
+    });
+    await B.act(async () => {
+      const set = (await B.store.getSet(ACCOUNT, REF))!;
+      await B.store.putSet({ ...set, rev: 2, updated: "2026-10-15T10:06:00.000Z" });
+      B.sync.schedulePush(ACCOUNT, REF);
+    });
+    expect(A.stats.imports).toBe(1);
+
+    // The incoming carrier also has rev 2 and adds no content on A. Revision comparison alone
+    // used to miss the pending edit; the persisted uploaded marker makes A write it now.
+    await A.act(() => A.sync.pull(ACCOUNT));
+    expect(A.stats.imports).toBe(2);
+    expect(notes(await A.store.getSet(ACCOUNT, REF))).toEqual(["a1:local edit on A"]);
+    expect(markdownOf(server.messages.find((m) => !m.deleted)!.eml)).toContain("local edit on A");
   });
 
   it("combines edits of the same note from two devices; a line changed on both becomes a conflict box", async () => {
@@ -421,6 +482,29 @@ describe("IMAP sync between two devices", () => {
       }).catch(() => {});
     }
     expect(await A.act(() => A.sync.syncProblems())).toEqual([]);
+  });
+
+  it("a failed subscription check warns like other folder problems, never offline, and creates no second folder (D35)", async () => {
+    for (const [error, warns] of [["NS_ERROR_NET_TIMEOUT", false], ["Experiment API unavailable", true]] as const) {
+      const server = makeServer();
+      const A = await device(server);
+      A.messenger.thundernotes.subscribeCarrierFolder = async () => {
+        throw new Error(error);
+      };
+      const attempt = () =>
+        A.act(async () => {
+          const set = (await A.store.getSet(ACCOUNT, REF)) ?? initialSet("2026-10-17T10:00:00.000Z");
+          await A.store.putSet({ ...set, rev: set.rev + 1 });
+          A.sync.schedulePush(ACCOUNT, REF);
+        }).catch(() => {});
+      await attempt();
+      expect(await A.act(() => A.sync.syncProblems())).toEqual([]); // not after one failure
+      await attempt();
+      await attempt();
+      const problems = await A.act(() => A.sync.syncProblems());
+      expect(problems.map((p) => p.kind)).toEqual(warns ? ["folder"] : []);
+      expect(server.folderExists).toBe(false);
+    }
   });
 
   it("warns at once about a carrier that can't be read (D35)", async () => {
@@ -796,5 +880,107 @@ describe("IMAP sync between two devices", () => {
     expect(restorable(onB).annotations).toEqual([]);
     expect(onB.annotations.map((a) => a.id)).toEqual(["a2"]); // the rest untouched
     expect(onB.tombstones?.map((t) => t.id)).toEqual(["a1"]); // the deletion itself stays
+  });
+});
+
+// The merge spec (docs/SYNC.md; design review, public issue #1 P1.1): scenarios every device
+// must agree on. "Settled" means a further round of checks uploads nothing.
+describe("merge spec scenarios", () => {
+  const text = (d: { store: { getSet: (a: string, r: string) => Promise<AnnotationSet | null> } }) => d.store.getSet(ACCOUNT, REF).then((s) => s?.annotations[0]?.bodyMd);
+  /** One edit of note a1's text, as the add-on's save does (time, device). */
+  const edit = (body: string, at: string, by: string) => (set: AnnotationSet): AnnotationSet => ({
+    ...set,
+    rev: set.rev + 1,
+    updated: at,
+    annotations: set.annotations.map((a) => (a.id === "a1" ? { ...a, bodyMd: body, updated: at, textUpdated: at, textBy: by } : a)),
+  });
+  const start = async (body: string, ...devices: Awaited<ReturnType<typeof device>>[]) => {
+    const [first, ...others] = devices;
+    await first!.act(async () => {
+      const set = initialSet("2026-10-18T09:00:00.000Z");
+      set.annotations[0]!.bodyMd = body;
+      await first!.store.putSet(set);
+      first!.sync.schedulePush(ACCOUNT, REF);
+    });
+    for (const d of others) await d.act(() => d.sync.pull(ACCOUNT));
+  };
+  const settle = async (...devices: Awaited<ReturnType<typeof device>>[]) => {
+    for (let round = 0; round < 2; round++) for (const d of devices) await d.act(() => d.sync.pull(ACCOUNT));
+    const imports = devices.reduce((n, d) => n + d.stats.imports, 0);
+    for (const d of devices) await d.act(() => d.sync.pull(ACCOUNT));
+    expect(devices.reduce((n, d) => n + d.stats.imports, 0)).toBe(imports); // no endless new revisions
+  };
+
+  it("three devices editing different lines offline end with all three edits, no conflict", async () => {
+    const server = makeServer();
+    const [A, B, C] = [await device(server), await device(server), await device(server)];
+    await start("one\ntwo\nthree", A, B, C);
+    await A.act(async () => A.store.putSet(edit("ONE\ntwo\nthree", "2026-10-18T09:10:00.000Z", "A")((await A.store.getSet(ACCOUNT, REF))!)));
+    await B.act(async () => B.store.putSet(edit("one\nTWO\nthree", "2026-10-18T09:11:00.000Z", "B")((await B.store.getSet(ACCOUNT, REF))!)));
+    await C.act(async () => C.store.putSet(edit("one\ntwo\nTHREE", "2026-10-18T09:12:00.000Z", "C")((await C.store.getSet(ACCOUNT, REF))!)));
+    // They come online one after another, each uploading after merging what is there.
+    for (const d of [C, A, B]) await d.act(async () => d.sync.schedulePush(ACCOUNT, REF));
+    await settle(A, B, C);
+    for (const d of [A, B, C]) expect(await text(d)).toBe("ONE\nTWO\nTHREE");
+    expect(server.messages.filter((m) => !m.deleted)).toHaveLength(1);
+  });
+
+  it("a new device reading old and new revisions in any order takes the newest, no conflict", async () => {
+    for (const reversed of [false, true]) {
+      const server = makeServer();
+      const A = await device(server);
+      await start("first", A);
+      // Old revisions not removed yet (another device's cleanup failed): both on the server.
+      A.messenger.messages.delete = async () => {};
+      await A.act(async () => {
+        await A.store.putSet(edit("second", "2026-10-18T09:10:00.000Z", "A")((await A.store.getSet(ACCOUNT, REF))!));
+        A.sync.schedulePush(ACCOUNT, REF);
+      });
+      await A.act(async () => {
+        await A.store.putSet(edit("third", "2026-10-18T09:20:00.000Z", "A")((await A.store.getSet(ACCOUNT, REF))!));
+        A.sync.schedulePush(ACCOUNT, REF);
+      });
+      expect(server.messages).toHaveLength(3);
+      if (reversed) server.messages.reverse();
+      const N = await device(server);
+      await N.act(() => N.sync.pull(ACCOUNT));
+      expect(await text(N)).toBe("third");
+    }
+  });
+
+  it("a deliberate edit back to an earlier text reaches the other devices", async () => {
+    const server = makeServer();
+    const [A, B] = [await device(server), await device(server)];
+    await start("draft", A, B);
+    for (const [body, at] of [["final", "2026-10-18T09:10:00.000Z"], ["draft", "2026-10-18T09:20:00.000Z"]] as const) {
+      await A.act(async () => {
+        await A.store.putSet(edit(body, at, "A")((await A.store.getSet(ACCOUNT, REF))!));
+        A.sync.schedulePush(ACCOUNT, REF);
+      });
+      await B.act(() => B.sync.pull(ACCOUNT));
+      expect(await text(B)).toBe(body);
+    }
+    await settle(A, B);
+  });
+
+  it("without a known base, lines both have stay and the rest becomes a conflict box; equal times too", async () => {
+    const server = makeServer();
+    const [A, B] = [await device(server), await device(server)];
+    // Both start the same note independently (no common synced version), at the same moment.
+    const at = "2026-10-18T09:00:00.000Z";
+    for (const [d, body, by] of [[A, "shared line\nfrom A", "A"], [B, "shared line\nfrom B", "B"]] as const) {
+      await d.act(async () => {
+        const set = initialSet(at);
+        set.annotations[0] = { ...set.annotations[0]!, bodyMd: body, textUpdated: at, textBy: by };
+        await d.store.putSet(set);
+      });
+    }
+    await A.act(async () => A.sync.schedulePush(ACCOUNT, REF));
+    await B.act(async () => B.sync.schedulePush(ACCOUNT, REF));
+    await settle(A, B);
+    const merged = (await text(A))!;
+    expect(await text(B)).toBe(merged);
+    expect(merged.startsWith("shared line\n")).toBe(true);
+    expect(parseConflicts(merged)[0]!.versions.map((v) => v.text).sort()).toEqual(["from A", "from B"]);
   });
 });

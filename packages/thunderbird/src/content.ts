@@ -372,15 +372,16 @@ function createMargin(collapsed: boolean, width: number | null): Margin {
         read: () => send({ type: "readClipboard" }),
         write: (text) => send({ type: "writeClipboard", text }),
       },
-      async save(id, bodyMd) {
+      async save(id, bodyMd, base) {
         if (id === EMAIL_NOTE_ID) {
-          set = await send({ type: "setEmailNote", md: bodyMd });
+          set = await send({ type: "setEmailNote", md: bodyMd, base });
           await reportStatus();
-          return;
+          return set?.emailNoteMd ?? "";
         }
-        set = await send({ type: "update", id, bodyMd });
+        set = await send({ type: "update", id, bodyMd, base });
         markNote(id);
         await reportStatus();
+        return set?.annotations.find((a) => a.id === id)?.bodyMd ?? bodyMd;
       },
       async remove(id) {
         if (id !== EMAIL_NOTE_ID) return removeHighlight(id);
@@ -1053,6 +1054,14 @@ function showCarrierCover(): void {
     isCarrier = true;
     host.remove();
     showCarrierCover();
+    return;
+  }
+  if (loaded.unsupported === "missingMessageId") {
+    const notice = document.createElement("div");
+    notice.setAttribute("role", "status");
+    notice.textContent = "ThunderNotes can't safely annotate this message because Thunderbird supplied no Message-ID. No notes were loaded or saved.";
+    notice.style.cssText = "position:fixed;top:12px;right:12px;max-width:360px;padding:10px 14px;border:1px solid #b9a53c;border-radius:8px;background:#fff7c2;color:#222;font:14px/1.4 system-ui,sans-serif;box-shadow:0 2px 8px #0003;";
+    shadow.append(notice);
     return;
   }
   set = loaded.set;

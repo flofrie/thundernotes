@@ -52,9 +52,18 @@ interface CarrierEntry {
   merged: boolean;
 }
 
+/** The carrier known to represent one exact local set state. */
+interface UploadedSet {
+  carrier: string;
+  rev: number;
+  updated: string;
+}
+
 interface AccountState {
   folderId: string | null;
   carriers: Record<string, CarrierEntry>;
+  /** Per email, the exact local state known to exist in a readable server carrier. */
+  uploaded?: Record<string, UploadedSet>;
   /** Carriers we deleted that may still be listed until the folder is expunged. */
   deleted?: string[];
   /**
@@ -134,6 +143,28 @@ export async function syncProblems(): Promise<SyncProblem[]> {
 }
 
 const LAST_OK_KEY = "syncLastOk";
+const EXPERIMENT_PROBLEMS_KEY = "experimentProblems";
+
+interface ExperimentProblem {
+  since: string;
+  message: string;
+}
+
+async function recordExperimentProblem(accountId: string, error: unknown | null): Promise<void> {
+  const { [EXPERIMENT_PROBLEMS_KEY]: stored } = await messenger.storage.local.get(EXPERIMENT_PROBLEMS_KEY);
+  const all = stored && typeof stored === "object" ? (stored as Record<string, ExperimentProblem>) : {};
+  if (error === null) {
+    if (!(accountId in all)) return;
+    delete all[accountId];
+  } else {
+    const known = all[accountId];
+    all[accountId] = {
+      since: known?.since ?? new Date().toISOString(),
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  await messenger.storage.local.set({ [EXPERIMENT_PROBLEMS_KEY]: all });
+}
 
 /** When each account last synced without a problem (for the options page), at most once a minute. */
 async function recordSuccess(accountId: string): Promise<void> {
@@ -144,9 +175,10 @@ async function recordSuccess(accountId: string): Promise<void> {
 }
 
 /** Per account: synced (IMAP) or not (local, POP), when it last synced, its problem if any. */
-export async function syncStatus(): Promise<{ id: string; name: string; synced: boolean; lastOk?: string; problem?: SyncProblem }[]> {
-  const { [LAST_OK_KEY]: stored } = await messenger.storage.local.get(LAST_OK_KEY);
+export async function syncStatus(): Promise<{ id: string; name: string; synced: boolean; lastOk?: string; problem?: SyncProblem; experimentProblem?: ExperimentProblem }[]> {
+  const { [LAST_OK_KEY]: stored, [EXPERIMENT_PROBLEMS_KEY]: experimentStored } = await messenger.storage.local.get([LAST_OK_KEY, EXPERIMENT_PROBLEMS_KEY]);
   const lastOk = stored && typeof stored === "object" ? (stored as Record<string, string>) : {};
+  const experimentProblems = experimentStored && typeof experimentStored === "object" ? (experimentStored as Record<string, ExperimentProblem>) : {};
   const problems = new Map((await syncProblems()).map((p) => [p.accountId, p]));
   return (await messenger.accounts.list(false)).map((a) => ({
     id: a.id,
@@ -154,6 +186,7 @@ export async function syncStatus(): Promise<{ id: string; name: string; synced: 
     synced: a.type === "imap",
     ...(lastOk[a.id] ? { lastOk: lastOk[a.id] } : {}),
     ...(problems.has(a.id) ? { problem: problems.get(a.id)! } : {}),
+    ...(experimentProblems[a.id] ? { experimentProblem: experimentProblems[a.id] } : {}),
   }));
 }
 
@@ -228,7 +261,10 @@ const subscriptionChecked = new Set<string>();
 async function resubscribe(accountId: string): Promise<tb.MailFolder | null> {
   const result = await messenger.thundernotes.subscribeCarrierFolder(accountId, CARRIER_FOLDER).catch((e) => {
     log(accountId, `subscription check failed: ${e?.message ?? e}`);
-    return "missing" as const;
+    // Not proof the folder is missing (a second one would be created). Offline isn't a
+    // problem, and like other folder problems it warns after failing twice in a row (D35).
+    if (isConnectionError(e)) throw e;
+    throw new SyncError("folder", `ThunderNotes couldn't check whether the "${CARRIER_FOLDER}" folder is subscribed (${e?.message ?? e}). Sync will retry.`);
   });
   log(accountId, `carrier folder not visible; on the server: ${result}`);
   if (result !== "subscribed" && result !== "visible") return null;
@@ -367,14 +403,21 @@ async function carrierFolder(accountId: string, state: AccountState, create: boo
     // A restored folder has the old folder's id: set it up again (it is a new folder).
     prepared.delete(folder.id);
     state.carriers = {};
+    state.uploaded = {};
     if (where) hooks.folderRestored(account.name, where);
   }
   if (folder) state.folderId = folder.id;
   // Excluded from global search and fetched promptly: on creation, restore, and once per
   // session (also repairs a setting changed by hand in Folder Properties).
   if (folder && !prepared.has(folder.id)) {
-    prepared.add(folder.id);
-    await messenger.thundernotes.prepareCarrierFolder(folder.id).catch((e) => console.warn("ThunderNotes: folder setup", e));
+    try {
+      await messenger.thundernotes.prepareCarrierFolder(folder.id);
+      prepared.add(folder.id);
+      await recordExperimentProblem(accountId, null);
+    } catch (e) {
+      await recordExperimentProblem(accountId, e).catch((storageError) => console.warn("ThunderNotes: couldn't record folder setup warning", storageError));
+      console.warn("ThunderNotes: folder setup", e);
+    }
   }
   return folder;
 }
@@ -412,6 +455,9 @@ async function scan(folder: tb.MailFolder, state: AccountState): Promise<void> {
   }
   if (fresh) log(folder.accountId ?? "?", `found ${fresh} new message(s) in ${folder.path} (${seen.size} in all)`);
   for (const id of Object.keys(state.carriers)) if (!seen.has(id)) delete state.carriers[id];
+  for (const [ref, uploaded] of Object.entries(state.uploaded ?? {})) {
+    if (!state.carriers[uploaded.carrier]) delete state.uploaded![ref];
+  }
   state.deleted = [...deleted].filter((id) => seen.has(id));
 }
 
@@ -451,22 +497,46 @@ function sameNotes(a: AnnotationSet, b: AnnotationSet): boolean {
   return key(a) === key(b);
 }
 
+/** Records/checks that a readable carrier contains this exact local set state. */
+function markUploaded(state: AccountState, ref: string, set: AnnotationSet, carrier: string): void {
+  (state.uploaded ??= {})[ref] = { carrier, rev: set.rev, updated: set.updated };
+}
+
+function isUploaded(state: AccountState, ref: string, set: AnnotationSet): boolean {
+  const uploaded = state.uploaded?.[ref];
+  return !!(
+    uploaded &&
+    uploaded.rev === set.rev &&
+    uploaded.updated === set.updated &&
+    state.carriers[uploaded.carrier]?.ref === ref &&
+    !state.unreadable?.[uploaded.carrier]
+  );
+}
+
 /** A carrier's set taken over as is (nothing local): its texts are now synced. */
 function adopt(incoming: AnnotationSet, ref: string, accountId: string): AnnotationSet {
   const set: AnnotationSet = {
     ...incoming,
     email: { ...incoming.email, messageId: ref, accountId },
-    annotations: incoming.annotations.map(({ textBase: _, ...a }) => a),
+    annotations: incoming.annotations.map(({ textBase: _, textBases: __, ...a }) => a),
   };
   delete set.emailNoteBase;
+  delete set.emailNoteBases;
   return rememberSynced(set, set);
 }
 
-/** Merges every not-yet-merged carrier of one email into the local store. */
+/**
+ * Merges every not-yet-merged carrier of one email into the local store, oldest first (by the
+ * time and revision in its headers, then its Message-ID): a device that finds several revisions
+ * at once (a new device, old ones not removed yet) then knows each one's base when it gets to
+ * the next, whatever order the server lists them in (docs/SYNC.md).
+ */
 async function mergeRemote(accountId: string, ref: string, state: AccountState): Promise<boolean> {
   let changed = false;
-  for (const [id, entry] of Object.entries(state.carriers)) {
-    if (entry.ref !== ref || entry.merged) continue;
+  const waiting = Object.entries(state.carriers)
+    .filter(([, e]) => e.ref === ref && !e.merged)
+    .sort(([ia, a], [ib, b]) => a.updated.localeCompare(b.updated) || a.rev - b.rev || ia.localeCompare(ib));
+  for (const [id, entry] of waiting) {
     try {
       const incoming = await readCarrier(entry.tbId);
       // The notes must be for the email the headers name; else they'd be merged into the wrong one.
@@ -476,11 +546,12 @@ async function mergeRemote(accountId: string, ref: string, state: AccountState):
       const result = local
         ? mergeSets(local, incoming, undefined, "sync").set
         : adopt(incoming, ref, accountId);
+      const represented = sameNotes(result, incoming);
       if (local && result.rev === local.rev) {
         await putSet(result); // only the sync history learnt the incoming texts
       } else {
         // Only took over the other device's state: adopt its revision, so we don't echo it back.
-        if (sameNotes(result, incoming)) {
+        if (represented) {
           result.rev = incoming.rev;
           result.updated = incoming.updated;
         }
@@ -488,6 +559,9 @@ async function mergeRemote(accountId: string, ref: string, state: AccountState):
         await putSet(result);
         changed = true;
       }
+      // Keep an existing valid marker: switching it to a duplicate that is already flagged
+      // deleted can make the next scan think the represented state disappeared.
+      if (represented && !isUploaded(state, ref, result)) markUploaded(state, ref, result, id);
     } catch (e) {
       console.warn(`ThunderNotes: could not read carrier for ${ref}`, e);
       if (isConnectionError(e)) continue; // read it next time
@@ -527,6 +601,9 @@ async function deleteCarriers(state: AccountState, keep: (id: string, e: Carrier
       throw new SyncError("cleanup", `Old versions of ThunderNotes messages couldn't be removed (${e?.message ?? e}).`);
     });
   for (const [id] of remove) delete state.carriers[id];
+  for (const [ref, uploaded] of Object.entries(state.uploaded ?? {})) {
+    if (remove.some(([id]) => id === uploaded.carrier)) delete state.uploaded![ref];
+  }
   state.deleted = [...new Set([...(state.deleted ?? []), ...remove.map(([id]) => id)])];
   if (state.folderId) {
     await within(30_000, messenger.thundernotes.expungeFolder(state.folderId).catch((e) => console.warn("ThunderNotes: expunge", e)));
@@ -586,6 +663,7 @@ async function push(accountId: string, ref: string): Promise<void> {
       if (!hasContent(local) && !hasDeletions(local)) {
         await deleteCarriers(state, (_, e) => e.ref !== ref);
         await deleteSet(accountId, ref);
+        delete state.uploaded?.[ref];
         return merged;
       }
       // Each note names the synced text it was edited from: the receiver's merge base (D32).
@@ -604,6 +682,7 @@ async function push(accountId: string, ref: string): Promise<void> {
         client: await clientId(),
         merged: true,
       };
+      markUploaded(state, ref, local, carrier.messageId);
       // Recorded before the old revisions go: a crash in between leaves a duplicate, never a gap.
       await saveState(accountId!, state);
       await deleteCarriers(state, (id, e) => e.ref !== ref || id === carrier.messageId);
@@ -653,13 +732,12 @@ export function pull(accountId: string): Promise<void> {
         const gced = gcTombstones(set);
         if (gced !== set) await putSet(gced);
         const carriers = newest.get(ref) ?? [];
-        const latest = carriers.reduce((m, e) => Math.max(m, e.rev), -1);
-        if (gced.rev > latest || gced !== set || (!hasContent(gced) && !hasDeletions(gced))) {
-          toPush.push(ref); // something newer here than on the server
+        if (!isUploaded(state, ref, gced) || gced !== set || (!hasContent(gced) && !hasDeletions(gced))) {
+          toPush.push(ref); // this exact local state isn't known to be on the server
         } else if (carriers.length > 1) {
           // All merged and nothing new: just remove the extra carriers (e.g. old revisions
           // another device flagged deleted but that weren't expunged yet). No new revision.
-          const keepId = Object.entries(state.carriers).find(([id, e]) => e.ref === ref && e.rev === latest && !state.unreadable?.[id])![0];
+          const keepId = state.uploaded![ref]!.carrier;
           await deleteCarriers(state, (id, e) => e.ref !== ref || id === keepId);
         }
       }

@@ -22,6 +22,10 @@ Folder/UID is never a key.
 - Fallback fingerprint hash(Date+From+Subject+first 1 KB) when Message-ID is missing.
 - Links use `mid:` URIs (RFC 2392).
 
+**Implemented limit (dev issue #8):** Thunderbird's `MessageHeader.headerMessageId` is used as the key. If it is empty, ThunderNotes refuses to load or save annotations rather than colliding every such message under an empty key. The proposed fingerprint is not implemented: the MailExtension API documentation does not specify what it returns when the header is absent, and cross-device stability (including IMAP and local/POP messages) has not been verified on Thunderbird 153/158. If Thunderbird supplies a non-empty generated value, ThunderNotes currently treats that API value as the identity; that behavior also needs empirical verification. See `docs/SYNC.md` §1.
+
+**Accepted as is (2026-10-18, development issue #26, closed as not planned):** refusing to annotate a message with an empty Message-ID is the accepted behaviour. Thunderbird probably invents a Message-ID for messages without one; whether that value stays the same (across restarts, copies and computers) is not verified. So there may be corner cases where messages without a real Message-ID get the same notes, or a note doesn't find its message on another computer. This is a known potential issue, low priority, and won't be fixed: such messages are rare. The fingerprint fallback above is not planned.
+
 ## D3 — Anchoring = W3C Web Annotation selectors (2026-10-13, accepted; refined by D21)
 TextQuoteSelector (exact + prefix/suffix) + TextPositionSelector on normalised text.
 
@@ -36,10 +40,12 @@ Path `YYYY/MM/YYYY-MM-DD_subject-slug_<hash8>.md`.
 
 Canonical store; everything else is a sync target or a rebuildable cache.
 
+**Refined (2026-10-18, design review, public issue #1):** without the helper there are no files to rebuild from. Markdown is the canonical *interchange* format (export, carriers, the future folder); the authoritative state on each computer is the add-on's IndexedDB in the Thunderbird profile. Copies: the IMAP `ThunderNotes` folder (IMAP accounts only, D27), export zips, later the helper's folder. Notes in Local Folders and POP accounts have no copy but an export. The concept's "Where the notes live" lists what each copy restores and what can be undone without Git.
+
 ## D6 — Local notes folder is a Git repository (2026-10-13, accepted)
 The helper auto-commits (debounced) on every change from either side.
 
-- Gives history and undo, so conflict handling stays simple (rev/updated wins, Git as safety net).
+- Gives history and undo, so conflict handling stays simple (rev/updated wins, Git as safety net). *Superseded for conflicts (2026-10-18):* merging is D32 (line-by-line, conflict boxes) and D33 (deletion records), the same with or without the helper; Git adds history, not correctness.
 - Git is not the cross-device sync channel in the MVP; IMAP is.
 - Optional push to a private remote as backup or a future sharing path.
 
@@ -59,8 +65,22 @@ Primary target is the user's own Postfix-based mail server.
 ## D9 — No encryption by default (2026-10-13, accepted)
 Optional later; sharing notes may become a requirement, so formats stay plain.
 
-## D10 — Tasks = Markdown checkboxes with `@due(...)` (2026-10-13, accepted)
+**Clarified 2026-10-18 (development issue #9):** ThunderNotes does not inherit an email's S/MIME
+or OpenPGP protection. A highlight stores its exact quote and nearby prefix/suffix, so annotating an
+encrypted email copies decrypted content into the local database, exports and, for an IMAP email,
+a plain-text carrier on the mail server. Note text is plain there too.
+
+For now this is an explicit, documented limitation rather than a per-message warning or a second
+storage mode. ThunderNotes does not try to detect encrypted messages. A warning would not protect
+the stored data, omitting selectors would break anchoring, and local-only notes would silently give
+up the normal sync guarantee. Users who must keep the decrypted content within the original
+cryptographic envelope should not annotate that email. Optional encryption can still be designed
+later, but must cover notes and selectors together.
+
+## D10 — Tasks = Markdown checkboxes with `@due(...)` (2026-10-13, superseded by D38)
 Absolute dates are the core case; relative (`+2d`, natural language, normalised on save) and email-derived dates are extras.
+
+**Superseded by D38:** due dates are `@YYYY-MM-DD` (date words are converted when typed), without `@due(...)`, chrono-node or a time of day. Whether reminders bring times is decided with D38 stage 3.
 
 ## D11 — Notion: post-MVP, eventually two-way (2026-10-13, accepted)
 Runs in the helper or a sync service; the Notion token stays outside the browser profile.
@@ -97,6 +117,8 @@ Not supported:
 - classic Outlook (COM),
 - Mac-only routes,
 - a separate companion app.
+
+**Corrected (2026-10-18, design review, public issue #1):** classic Outlook on Windows runs Office.js add-ins too, so leaving it out is a scope choice (one client to build and test first), not a technical limit. Add-ins don't run on non-Microsoft accounts (IMAP, Gmail) in any Outlook except Outlook for Mac with an IMAP CloudCache account ([Microsoft: Outlook add-ins overview](https://learn.microsoft.com/en-us/office/dev/add-ins/outlook/outlook-add-ins-overview), checked 2026-10-18). Before building: which Graph APIs and sign-in the adapter needs, per account type.
 
 Built after the Thunderbird MVP.
 
@@ -177,8 +199,15 @@ Selectors are made and matched against the normalised visible text of the view c
 ### Matching order
 Matching order: position → exact quote → quote + prefix/suffix context → loose (letters and digits, case-insensitive) → fuzzy → partial → orphan.
 
+Offsets are JavaScript string offsets (UTF-16 code units), because the same offsets are applied to DOM text nodes and the stored normalised text. A still-valid position is sufficient. A unique exact quote is sufficient. If an exact or loose quote occurs more than once, a candidate with at least 8 matching context characters across prefix and suffix that beats the next by at least 4 wins; among candidates whose context is about as good, the one clearly nearest the old position wins (see below). Fuzzy alignments whose text ranges overlap are grouped as one candidate location before the confidence check; each location is represented by its highest-scoring alignment. Across distinct locations, a fuzzy candidate with a score of at least 60/92 and a lead of at least 6 over the next wins; among about equally good ones, the clearly nearest to the old position. Scores weight quote similarity 50, prefix and suffix agreement 20 each, and old-position proximity at most 2. Below these thresholds the annotation remains an orphan in the note list, rather than being placed at a merely plausible passage. The card's existing “can't be found at the moment” warning is also used for ambiguous matches; no new repair action is introduced.
+
 - Fuzzy uses `approx-string-match` (Myers' algorithm, MIT, as in Hypothesis), not diff-match-patch, whose matcher is limited to 32-character patterns.
 - The fuzzy step is required, not optional: Plain view rewrites HTML (`*` bullets, `/emphasis/`, links as `text <url>`), and changed wording defeats exact and loose matching.
+- Low-confidence repeated/fuzzy matches are left unplaced. Regression tests cover repeated quotes with and without distinguishing context, UTF-16 offsets after a supplementary Unicode character, and the existing Original/Simple/Plain and long-message fixtures.
+
+Follow-up (2026-10-18, 0.48.6, development issue #10): fuzzy alignments with overlapping ranges represent one physical passage, not competing candidate locations. Confidence thresholds compare distinct locations, so a quote at the start of a message can anchor despite multiple equally good overlapping alignments, while two plausible locations remain orphaned. Tests cover both cases.
+
+**Nearness as a guarded tie-break (2026-10-18, 0.48.6, issue #10; owner's decision).** Among equally good candidates (repeated exact or loose quotes whose context is about as good, or fuzzy locations within the score margin), the one nearest the old stored position wins if the next one is at least twice as far; otherwise, or when no position is stored, the note stays unplaced. A view change (Original, Simple, Plain) shifts text only a little, so the nearest copy is usually the one the note was made on: in 180 generated cases with a duplicated passage, nearness chose the original copy every time, while dropping it left all 180 unplaced. Two copies about as near still count as a real coin flip and stay unplaced. Considered: no nearness at all (strict, but notes on repeated text such as quoted replies and signatures would vanish after every view switch); nearness without a guard (the old behaviour, which guesses even between equally near copies).
 
 ### Partial anchors and orphans
 Text that exists in only one view (Simple view shows `display:none` content, Original hides it) anchors partially: the surviving part is highlighted and the annotation is marked "partly shown"; with no match at all it stays an orphan in the email's note list, never dropped.
@@ -339,7 +368,11 @@ The reader requires the final separator and rejects invalid boundary metadata, u
 
 This is an intentional development-only format change: the add-on rejects version 1 files explicitly, with no heuristic compatibility path in it. There are no users. IndexedDB's data model is unchanged. Development data in format 1 is converted once, outside the add-on, by `scripts/migrate-format2/`: `migrate.py` rewrites an account's carriers on the IMAP server (dry run by default, read-only; `--apply` backs up the originals, uploads the converted carriers and only then deletes the old ones), and `convert.ts export` converts an export zip. Both read with a frozen copy of the format-1 reader and check that each converted file reads back to the same notes. The MIME carrier envelope remains version 1.
 
-**One Markdown parser (2026-10-18):** `core/src/markdown-structure.ts` creates the supported markdown-it dialect, supplies parser-derived code ranges, and owns the note-layout preprocessing and original-line map. Rendering and task extraction share both that preprocessing and the checklist-token predicate. Quote/list container boundaries and indentation are interpreted by markdown-it, not a second handwritten parser. Rendered checkboxes carry their original `data-line`; the card rejects missing or invalid mappings instead of guessing by checkbox order.
+**Schemas and version policy (2026-10-18, development issue #13):** `docs/schemas/` holds Draft 2020-12 JSON Schemas for format-2 front matter, export settings version 1 and settings-carrier JSON version 1. Tests validate reference files and generated output with a test-only validator; no validator is bundled into the add-on. The schemas describe well-formed interchange values; readers remain lenient where already implemented, and body framing and unique IDs still need the format reader. Unknown fields may be ignored and dropped. Safe optional additions keep the version; incompatible changes get a new schema/version and an explicit compatibility/conversion plan, with preservation tests if existing data must be carried forward. The README records the existing format-1 conversion and future format-3 obligations; migration scripts and corner cases are out of scope. It also records that `parseSettings` currently ignores the JSON version: a future incompatible settings carrier needs a safe refusal/identity strategy, not merely a version bump.
+
+**Blank-line layout in lists and quotes (2026-10-18, 0.48.4, development issue #15):** to keep each empty visual paragraph inside its Markdown container, the renderer indents its no-break-space padding to the content column of the active list item and keeps the quote prefix. The source-line map still points all padding lines to the original blank line. This prevents list continuation paragraphs from becoming code and keeps text extraction aligned with rendering.
+
+**One Markdown parser (2026-10-18):** `core/src/markdown-structure.ts` creates the supported markdown-it dialect, supplies parser-derived code ranges, and owns the note-layout preprocessing and original-line map. Rendering and task extraction share both that preprocessing and the checklist-token predicate. Quote/list container boundaries and indentation are interpreted by markdown-it, not a second handwritten parser. Rendered checkboxes carry their original `data-line`; the card rejects missing or invalid mappings instead of guessing by checkbox order. `tasksIn` and `taskAt` share the prepared parse: two parses per note, pinned by a parser-count test.
 
 The parser stays out of the message display script (D22). The renderer, in the background, marks what the card's menus need: each checkbox's source line, and on an `@` date that isn't ISO yet the date it would be (`data-iso`). "Copy task" checks the clicked line's shape only (`taskAtLine`; a rendered box or the editor's syntax tree has already ruled out code), and the background checks again with the parser before copying. "Convert to date" is worked out in the background (`convertLooseDate`). The live editor uses the text-level helpers (`looseDatesInText`, `labelsInText`): it knows its code blocks from its own syntax tree. A test fails if markdown-it gets bundled into the display script again. The display script is about 84 KiB (88 KiB before format 2, 184 KiB with the parser in it).
 
@@ -984,8 +1017,10 @@ Extended 2026-10-17 (0.28.0): the labels' **order** is a setting too: most used 
 The add-on requires Thunderbird 153 or newer (`strict_min_version` in `manifest.json`): the current extended-support release (ESR, "Meadow", July 2026), which organisations mostly run.
 
 - Replaces "Thunderbird ≥ 128" from the first concept, which was an assumption, never tested.
-- Tested so far only on Thunderbird 158 (the monthly release). Not yet tested on 153 ESR; most at risk is the Experiment, which uses Thunderbird internals (print menus, message list, message pane) that change between versions.
+- Until 2026-10-18 tested only on Thunderbird 158 (the monthly release), not on 153 ESR; most at risk is the Experiment, which uses Thunderbird internals (print menus, message list, message pane) that change between versions.
+- **Tested on 153 ESR (2026-10-18, development issue #24):** the owner ran the release checklist and synced notes between two physical computers on the same IMAP accounts, both on macOS: everything worked. The minimum stays 153. Windows and Linux aren't tested yet. Details are in the tested-version register (`docs/RELEASE.md`).
 - The previous ESR line (140) isn't supported: it would need its own testing for little gain.
+- **Maximum version (2026-10-18, 0.75.0):** addons.thunderbird.net requires a `strict_max_version` for add-ons with an Experiment (its upload check refuses them otherwise). It is the highest version tested, now `158.*` (153 ESR and the current release). Each new Thunderbird release needs a short test and the maximum raised (on ATN for the version already listed, and in the manifest for the next one); until then release-channel users of the newer Thunderbird can't install it. Considered: `153.*` (ESR only, no monthly upkeep, but release users shut out). Thunderbird has announced it will stop running Experiments on the release channel (reported postponed to summer 2027); then only the ESR line remains.
 
 ## D42 — Notes belong to an email in one account (2026-10-18, accepted; refines D2, D4, D27, D40)
 An email's notes are identified by its Message-ID **and the account it is in**: the same message in a work and a personal account has two independent sets of notes, each synced only through its own account's `ThunderNotes` folder. Each account is its own world: work notes never reach the personal server and the other way round.
@@ -1030,3 +1065,20 @@ An email removed outside Thunderbird (in webmail, another client, on the server)
 - Options page, a card "Orphaned notes" of its own (shown only when there are any, between "Sync" and "Devices", 0.45.2): a list of the notes whose email can't be found (subject, date, account, how many), each with Show (all its notes as text, also those without tasks) and Delete (two clicks).
 - Deleting is an ordinary deletion of every note on the email: synced (the carrier then holds only deletion records, D33).
 - Found again (the account synced late, the email restored): the mark goes by itself.
+
+## D45 — Sync and merge specification (2026-10-18, accepted; design review, public issue #1 P1.1)
+The rules devices follow to combine notes are written down as a normative specification, `docs/SYNC.md`: the model (one set per email and account, carriers as revisions), what `rev`, the times and the bases mean, the merge per part (text three-way against a common base, colour, passage, deletion), the order of merging, cleanup, uploading, editing while sync runs, import, and the known limits. Its scenarios are tests ("merge spec scenarios" in `packages/thunderbird/test/sync.test.ts`, and unit tests in core and the background).
+
+`rev` is a revision counter per writer, not proof of what a carrier contains: correctness comes from the merge (bases, deletion times), and `rev` only names and orders carriers.
+
+Writing the scenarios as tests found four gaps, fixed with it (0.48.0):
+- **Several bases.** A carrier named only its writer's newest synced text as the base. After a merge (A combining C's edit) that is a text other devices may never have seen, so a third device found no base and made a conflict box although no line was changed twice. Carriers now list the hashes of every synced text their writer remembers, newest first (`text_bases`, `email_note_bases`; `text_base` stays the first, so 0.47.0 still reads them); the receiver merges against the newest it has too.
+- **Oldest first.** A device finding several revisions of one email at once merged them in the server's order; the newest first left the older ones without a known base (a conflict box on a new device). They are merged oldest first now (headers' time, revision, Message-ID).
+- **Editing while sync runs.** An open editor isn't replaced by incoming changes, but saving then overwrote a change that had arrived meanwhile (and the upload spread the loss). A save now sends the text the edit started from; if the stored text changed since, both are combined line by line, a line changed differently on both becoming a conflict box.
+- **Equal-time colours.** Two colours chosen at the same moment: each device took the other's, swapping until a later stamp settled it. In sync the greater colour name now wins on both.
+
+Follow-up (0.48.1, development issue #14): the upload backstop no longer compares independent devices' revision counters. Each device records the exact local `rev` and `updated` and the readable carrier known to represent them. If the local state changes or that carrier disappears, the next periodic check uploads. This closes the case where another device replaced the last carrier with the same revision while a local edit was waiting.
+
+Considered: a CRDT for note texts (exact convergence, but per-character metadata in the files and no readable Markdown), vector clocks per note (exact "contains", but more machine data per carrier than the merge needs). The base list gets the cases that occur right with plain text and hashes.
+
+Follow-up (2026-10-18, 0.48.5, development issue #16): note analysis uses one parse of the source to preserve source structure and one parse of the prepared Markdown to derive code and checklist line maps together. Consumers reuse that shared result instead of independently parsing for code and tasks.

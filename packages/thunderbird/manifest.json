@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ThunderNotes",
-  "version": "0.47.0",
+  "version": "0.75.0",
   "description": "Highlight text in emails and attach Markdown notes.",
   "icons": {
     "16": "icons/icon.svg",
@@ -12,7 +12,8 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "thundernotes@webterminate.com",
-      "strict_min_version": "153.0"
+      "strict_min_version": "153.0",
+      "strict_max_version": "158.*"
     }
   },
   "background": {

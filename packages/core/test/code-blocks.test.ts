@@ -7,8 +7,10 @@
 // Issues #4, #5: what counts as code must be what the renderer draws as code. The lines the
 // renderer draws a checkbox for (data-line) must be exactly the tasks tasksIn finds.
 
-import { describe, expect, it } from "vitest";
+import MarkdownIt from "markdown-it";
+import { describe, expect, it, vi } from "vitest";
 import { codeLines, labelsIn, looseDates, removeLabelFromNote, renderMarkdown, tasksIn } from "../src/index.js";
+import { prepareMarkdown } from "../src/markdown-structure.js";
 
 const NOTES: Record<string, string> = {
   "quote container ends": "> ```\n> quoted code\n\n- [ ] actual task",
@@ -54,6 +56,33 @@ describe("code blocks as the renderer sees them", () => {
     for (const before of examples) for (const gap of ["\n", "\n\n", "\n\n\n"]) {
       const md = `${before}${gap}- [ ] actual task`;
       expect(tasksIn(md).map((t) => t.line)).toEqual(drawn(md));
+    }
+  });
+
+  it.each([
+    ["list continuation", "1. item\n\n    continued text #work @tomorrow"],
+    ["quoted list continuation", "> 1. item\n>\n>     continued text #work @tomorrow"],
+    ["nested list continuation", "- item\n  - nested\n\n      continued text #work @tomorrow"],
+    ["quote continuation", "> first paragraph\n>\n> second paragraph #work @tomorrow"],
+  ])("keeps blank-line padding inside %s and derives code from the padded Markdown", (_name, source) => {
+    const { text, env } = prepareMarkdown(source);
+    const actual = [...codeLines(text)].map((line) => env.lineOf[line]);
+    expect(actual).toEqual([...codeLines(source)]);
+    expect(labelsIn(source)).toEqual(["work"]);
+    expect(looseDates(source)).toHaveLength(1);
+    expect(renderMarkdown(source)).not.toContain("<pre><code>continued text");
+  });
+
+  it("keeps the 500-note, 60-line task workload to two parser passes per note", () => {
+    const parse = vi.spyOn(MarkdownIt.prototype, "parse");
+    const note = Array.from({ length: 60 }, (_, i) => i % 5 === 0 ? `- [ ] task ${i} #work` : `context ${i}`).join("\n");
+    try {
+      let extracted = 0;
+      for (let i = 0; i < 500; i++) extracted += tasksIn(note).length;
+      expect(extracted).toBe(6000);
+      expect(parse).toHaveBeenCalledTimes(1000);
+    } finally {
+      parse.mockRestore();
     }
   });
 

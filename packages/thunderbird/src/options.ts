@@ -329,6 +329,7 @@ interface AccountState {
   synced: boolean;
   lastOk?: string;
   problem?: { message: string; since: string };
+  experimentProblem?: { message: string; since: string };
 }
 
 async function showSyncStatus(): Promise<void> {
@@ -342,19 +343,23 @@ async function showSyncStatus(): Promise<void> {
   for (const a of accounts) {
     const li = document.createElement("li");
     const dot = document.createElement("span");
-    dot.className = `dot${a.problem ? " bad" : a.synced ? "" : " off"}`;
+    dot.className = `dot${a.problem || a.experimentProblem ? " bad" : a.synced ? "" : " off"}`;
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = a.name;
     const state = document.createElement("span");
-    state.className = a.problem ? "problem" : "state";
-    state.textContent = a.problem
+    state.className = a.problem || a.experimentProblem ? "problem" : "state";
+    const syncState = a.problem
       ? `Sync problem since ${formatDate(a.problem.since)}: ${a.problem.message}`
       : !a.synced
         ? "Not synced (local folders and POP accounts have no server folder; the export is their backup)"
         : a.lastOk
           ? `Synced, last ${new Date(a.lastOk).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
           : "Synced";
+    const experimentState = a.experimentProblem
+      ? `Folder setup failed since ${formatDate(a.experimentProblem.since)}: ${a.experimentProblem.message}. Notes may still sync, but carrier messages may appear in global search; setup retries during sync.`
+      : "";
+    state.textContent = [syncState, experimentState].filter(Boolean).join(" · ");
     li.append(dot, name, state);
     list.append(li);
   }

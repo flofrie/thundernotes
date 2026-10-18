@@ -528,4 +528,17 @@ describe("marked headings inside a note", () => {
     const body = "Before\n## stray <!-- tn:nobody -->\nAfter";
     expect(fromMarkdown(toMarkdown(withBody(body))).annotations[0]!.bodyMd).toBe(body);
   });
+
+  // docs/SYNC.md: two devices choosing a colour at the same moment agree on one, whichever merges whose.
+  it("decides equal-time colour changes the same way on both devices in sync", () => {
+    const at = "2026-10-18T10:00:00.000Z";
+    const set = (colour: string): AnnotationSet => ({
+      version: 1, email: { messageId: "m@x" }, rev: 2, created: at, updated: at, emailNoteMd: "n", emailNoteColour: colour, emailNoteColourUpdated: at,
+      annotations: [{ id: "a", selectors: [{ type: "TextQuoteSelector", exact: "q" }], bodyMd: "x", created: at, updated: at, colour, colourUpdated: at }],
+    });
+    const onA = mergeSets(set("red"), set("blue"), undefined, "sync").set;
+    const onB = mergeSets(set("blue"), set("red"), undefined, "sync").set;
+    expect(onA.annotations[0]!.colour).toBe(onB.annotations[0]!.colour);
+    expect(onA.emailNoteColour).toBe(onB.emailNoteColour);
+  });
 });

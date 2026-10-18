@@ -54,6 +54,11 @@ export interface Annotation {
   textBy?: string;
   /** In carriers: hash8 of the synced text this one was edited from (the merge's base). */
   textBase?: string;
+  /**
+   * In carriers: hash8 of every synced text the writer remembers, newest first (the first is
+   * `textBase`). The receiver merges against the newest it knows too (docs/SYNC.md).
+   */
+  textBases?: string[];
 }
 
 /** One set per email (D4): one file, one carrier message. */
@@ -89,6 +94,7 @@ export interface AnnotationSet {
   emailNoteColourUpdated?: string;
   emailNoteBy?: string;
   emailNoteBase?: string;
+  emailNoteBases?: string[];
   annotations: Annotation[];
   tombstones?: Tombstone[];
   /** Synced card folding by annotation id (only with the "sync collapsed notes" setting, D30). */

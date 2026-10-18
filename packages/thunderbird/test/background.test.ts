@@ -44,7 +44,9 @@ beforeAll(async () => {
         ? { onMessage: { addListener: (l: typeof listener) => (listener = l) }, getURL: () => "moz-extension://x/tasks.html", getManifest: () => ({ version: "0" }), sendMessage: async () => {}, onInstalled: anything(), onStartup: anything() }
         : k === "messageDisplay"
           ? { getDisplayedMessages: async () => ({ messages: [header] }), onMessagesDisplayed: anything() }
-          : k === "accounts"
+          : k === "thundernotes"
+            ? new Proxy(anything(), { get: (b, f) => (f === "deviceName" ? async () => "Laptop" : b[f]) })
+            : k === "accounts"
             ? { list: async () => accounts, get: async (id: string) => accounts.find((a) => a.id === id) }
             : base[k],
   });
@@ -52,6 +54,20 @@ beforeAll(async () => {
 });
 
 describe("from an email", () => {
+  it("does not load or save notes when Thunderbird supplies no Message-ID", async () => {
+    const original = header.headerMessageId;
+    try {
+      stored.clear();
+      header.headerMessageId = "";
+      const loaded = await listener({ type: "load" }, { tab: { id: 3 } }) as { set: AnnotationSet | null; unsupported?: string };
+      expect(loaded).toMatchObject({ set: null, unsupported: "missingMessageId" });
+      await expect(listener({ type: "setEmailNote", md: "must not be stored" }, { tab: { id: 3 } })).rejects.toThrow("without a Message-ID");
+      expect(stored.size).toBe(0);
+    } finally {
+      header.headerMessageId = original;
+    }
+  });
+
   // Dev issue #3.
   it("changes a label's colour only in the account of the email it was changed in", async () => {
     await listener({ type: "setLabelColour", label: "urgent", colour: "red", ref: "mail@x", refAccount: "work" }, { tab: { id: 3 } });
@@ -88,5 +104,27 @@ describe("from an email", () => {
     const md = "```\n@24.10.27\n```\n@24.10.27 and @24.10.27";
     expect(await listener({ type: "convertLooseDate", md, text: "@24.10.27", k: 1, ref: "mail@x", refAccount: "work" }, { tab: { id: 3 } })).toBe("```\n@24.10.27\n```\n@24.10.27 and @2027-10-24");
     expect(await listener({ type: "convertLooseDate", md, text: "@24.10.27", k: 2, ref: "mail@x", refAccount: "work" }, { tab: { id: 3 } })).toBeNull();
+  });
+
+  // docs/SYNC.md: an edit from another device that arrived while this note was being edited.
+  it("combines a save with what arrived while the note was being edited, instead of overwriting it", async () => {
+    header.folder.accountId = "work";
+    const at = "2026-10-18T09:00:00.000Z";
+    const note = (bodyMd: string) => ({ id: "n1", selectors: [{ type: "TextQuoteSelector" as const, exact: "q" }], bodyMd, created: at, updated: at });
+    // The editor opened on "one\ntwo\nthree"; meanwhile sync brought line one changed elsewhere.
+    stored.set(key("work", "mail@x"), { version: 1, email: { messageId: "mail@x", accountId: "work" }, rev: 2, created: at, updated: at, annotations: [note("ONE (phone)\ntwo\nthree")], emailNoteMd: "remote note" });
+    const save = (request: object) => listener({ ...request, ref: "mail@x", refAccount: "work" }, { tab: { id: 3 } }) as Promise<AnnotationSet>;
+    const set = await save({ type: "update", id: "n1", bodyMd: "one\ntwo\nthree (here)", base: "one\ntwo\nthree" });
+    expect(set.annotations[0]!.bodyMd).toBe("ONE (phone)\ntwo\nthree (here)");
+    // The same line changed on both: a conflict box, both kept.
+    const clash = await save({ type: "update", id: "n1", bodyMd: "ONE (laptop)\ntwo\nthree (here)", base: "one\ntwo\nthree (here)" });
+    expect(clash.annotations[0]!.bodyMd).toMatch(/^> \[!conflict\][\s\S]*ONE \(laptop\)[\s\S]*ONE \(phone\)/);
+    // Not changed meanwhile, or no base sent: what was written.
+    const plain = await save({ type: "update", id: "n1", bodyMd: "just this", base: clash.annotations[0]!.bodyMd });
+    expect(plain.annotations[0]!.bodyMd).toBe("just this");
+    // The whole-email note the same way.
+    const email = await save({ type: "setEmailNote", md: "local note", base: "" });
+    expect(email.emailNoteMd).toMatch(/^> \[!conflict\]/);
+    expect(email.emailNoteMd).toContain("remote note");
   });
 });

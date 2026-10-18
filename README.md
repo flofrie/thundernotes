@@ -18,11 +18,22 @@ between your computers through your own mail server, and stay plain files you ow
   computers are combined line by line.
 - **Yours to keep.** Export all notes as Markdown files (one per email, with YAML front matter)
   plus your settings; import them again. Print an email with or without its notes.
-- **Private.** Nothing leaves your computer except to your own mail server. No analytics, no third
-  parties.
+- **Private.** Nothing leaves your computer except to your own mail server. No analytics or third
+  parties. ThunderNotes data is plain text, not end-to-end encrypted by the add-on.
 
-Requires Thunderbird 153 (the current extended-support release, ESR) or newer. Emails in local folders and POP accounts can be annotated too,
+Requires Thunderbird 153 (the current extended-support release, ESR) or newer; tested on 153 ESR and 158 on macOS (Windows and Linux not yet). Emails in local folders and POP accounts can be annotated too,
 but aren't synced (export is their backup).
+
+## Privacy and encrypted email
+
+ThunderNotes stores notes and highlighting information as plain text in the Thunderbird profile,
+exports, and—in an IMAP account—the account's `ThunderNotes` folder. Highlighting a passage copies
+the exact text and nearby context into that data. On an S/MIME- or OpenPGP-encrypted email, this is
+decrypted content and the carrier that syncs it is **not** encrypted like the original message.
+
+ThunderNotes does not currently detect encrypted messages or warn per message. Do not annotate an
+encrypted email if its decrypted text must not be stored in the Thunderbird profile, an export, or
+as a plain carrier on the mail server.
 
 ## Install
 
@@ -53,6 +64,11 @@ Planned later: an Outlook add-in for Microsoft 365/Exchange mailboxes, sharing t
 - Load the add-on in a separate Thunderbird profile: *Tools → Developer Tools → Debug Add-ons →
   Load Temporary Add-on…* → `packages/thunderbird/manifest.json`
 - `npm run package` builds the installable `.xpi` (see [Releasing](docs/RELEASE.md))
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for how
+to report a bug, what a pull request needs, and how contributions reach a release.
 
 ## Licence
 

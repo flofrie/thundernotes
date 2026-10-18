@@ -1,10 +1,10 @@
-> Snapshot of the living concept doc as of 2026-10-17; where they differ, `docs/DECISIONS.md` takes precedence.
+> Snapshot of the living concept doc as of 2026-10-18; where they differ, `docs/DECISIONS.md` takes precedence.
 
 # ThunderNotes — Concept
 
-As of 2026-10-17 · Florian
+As of 2026-10-18 · Florian
 
-ThunderNotes 0.41.0 lets you highlight text in any email, attach Markdown notes in a Word-style margin, work through the tasks in those notes in a task view, and find everything again on every device through a `ThunderNotes` folder in each IMAP account. This doc describes the product as designed and built through decisions D1–D41; where it and `docs/DECISIONS.md` in the repo differ, the decision log wins.
+ThunderNotes 0.75.0 lets you highlight text in any email, attach Markdown notes in a Word-style margin, work through the tasks in those notes in a task view, and find everything again on every device through a `ThunderNotes` folder in each IMAP account. This doc describes the product as designed and built through decisions D1–D45; where it and `docs/DECISIONS.md` in the repo differ, the decision log wins.
 
 ## Goals and principles
 
@@ -12,20 +12,23 @@ ThunderNotes must install and work like any other add-on, keep notes as plain po
 
 - **Zero extra setup (D16).** No separate login, software or configuration for the core features; sync uses the accounts already set up in Thunderbird. Anything that needs more, such as the native helper for a Markdown folder with Git, is an opt-in power feature.
 - **Never touch the original email.** Notes live beside the message, keyed by its Message-ID (D2). The only mark on the original is the `$annotated` keyword behind the tag and the column.
-- **Plain, portable Markdown (D25).** One readable Markdown file per email is the canonical format: the same for export, IMAP carriers and the future Git folder. Every other store is a sync target or a cache that can be rebuilt.
+- **Plain, portable Markdown (D25).** One readable Markdown file per email is the canonical interchange format: the same for export, IMAP carriers and the future Git folder. The notes themselves live in the add-on's database in the Thunderbird profile (see Where the notes live).
 - **Standard IMAP only (D7, D14).** Carriers are ordinary messages in an ordinary folder, so any server works. On Gmail they stay visible as clearly named messages (D8).
 - **Local-first.** Everything works offline; sync catches up later.
 - **Nothing is lost silently.** Notes whose passage can't be found stay listed, clashing edits become conflict boxes, deletions can be restored for 30 days, and unsaved text survives a crash.
 - **No encryption by default (D9).** Formats stay plain so sharing notes remains possible later.
+  This includes annotations on encrypted mail: their decrypted quote, context and note text are
+  plain in the Thunderbird profile, exports and IMAP carrier. ThunderNotes does not detect such
+  messages; don't annotate one when those copies would be unacceptable.
 
 | Fixed fact | Value |
 | --- | --- |
 | Add-on ID | `thundernotes@webterminate.com`, never to change: updates and local storage are tied to it (D17) |
 | Licence | MPL-2.0, the header in every source file (D18) |
-| Platform | Thunderbird ≥ 153 (the current ESR), MailExtension Manifest V3 (D41); tested on 158 |
+| Platform | Thunderbird ≥ 153 (the current ESR), MailExtension Manifest V3 (D41); tested on 153 ESR and 158, on macOS |
 | Repositories | Public `flofrie/thundernotes`, one commit per release; development in the private `flofrie/thundernotes-dev` (D12) |
 | Distribution | An `.xpi` from `npm run package`, attached to each public release (`docs/RELEASE.md`) |
-| Current version | 0.41.0 |
+| Current version | 0.75.0 |
 
 ## Architecture
 
@@ -34,7 +37,7 @@ ThunderNotes is one TypeScript monorepo (D13): a client-independent core, a Thun
 | Package | What it holds | Status |
 | --- | --- | --- |
 | `core` | Data model, W3C anchoring, Markdown + YAML format, carrier messages, three-way merge and conflict boxes, colours. No Thunderbird, Outlook or Node APIs. | Built, unit-tested (`npm test`) |
-| `thunderbird` | MailExtension: message display script (highlights, margin cards, editor loader), background script (IndexedDB store, Markdown rendering, sync), toolbar popup, task view, options page, one Experiment | 0.41.0 |
+| `thunderbird` | MailExtension: message display script (highlights, margin cards, editor loader), background script (IndexedDB store, Markdown rendering, sync), toolbar popup, task view, options page, one Experiment | 0.75.0 |
 | `helper` | Optional native messaging host: live Markdown folder with Git (D6) | Not started (phase 3) |
 | `outlook` | Modern add-in for Microsoft 365/Exchange, storage via Microsoft Graph (D15) | Later |
 
@@ -50,6 +53,16 @@ Sync targets:  Markdown folder (helper, phase 3)  |  IMAP ThunderNotes folder  |
 
 Two-headed arrows sync both ways; parts marked with a phase or "later" are not built yet. All views talk to one store in the background script, so a new sync target never touches the UI.
 
+**Where the notes live.** On each computer the notes are in the add-on's IndexedDB database in the Thunderbird profile, one set per email and account (D42): that is the authoritative state, what every view shows and edits. The rest are copies of it:
+
+| Copy | What it can restore | Limits |
+| --- | --- | --- |
+| IMAP `ThunderNotes` folder (IMAP accounts) | Everything: a new device, or the add-on installed again, reads its notes from there | Only IMAP accounts; Local Folders and POP accounts are never synced (D27) |
+| Export zip (options page) | Everything at the time of the export, also settings | Only as recent as the last export; the options page reminds when local or POP notes changed since (they have no other copy) |
+| Markdown folder with Git (helper, phase 3) | Everything, with full history | Not built |
+
+Without the helper there is no history of earlier note versions. What can be undone: a deleted note or emptied whole-email note for 30 days (D33); edits clashing between devices are kept side by side in a conflict box (D32); ticking, quick actions and deleting a label for a few seconds; typed text that wasn't saved survives a crash as a draft (D34); the editor's own undo while editing. Removing the add-on deletes its database: notes of IMAP accounts come back from the server, all others only from an export.
+
 **The Experiment API.** One small Experiment (`packages/thunderbird/experiments/thundernotes/`) does what no MailExtension API can. It is the only privileged code and is checked on every Thunderbird ESR, since it uses internal modules (D19, D26).
 
 | Job | Why an Experiment | Decision |
@@ -63,7 +76,7 @@ Two-headed arrows sync both ways; parts marked with a phase or "later" are not b
 | Keyboard focus into the message pane or a tab | A page's own request for the focus is ignored there | D37, D38 |
 | "Print with Notes…" in the File and right-click menus | Add-ons can add only to their own right-click submenu, never to the File menu or the print dialog | D23 |
 
-**Platform choice.** Only a MailExtension can draw highlights inside the message pane, so a standalone app or an IMAP proxy was rejected. IMAP in the helper was rejected because it would need extra software and credentials (D16, D19). Outlook comes later as a modern add-in for Microsoft 365/Exchange mailboxes; Microsoft doesn't load add-ins for IMAP accounts or classic Outlook (D15).
+**Platform choice.** Only a MailExtension can draw highlights inside the message pane, so a standalone app or an IMAP proxy was rejected. IMAP in the helper was rejected because it would need extra software and credentials (D16, D19). Outlook comes later as a modern add-in for Microsoft 365/Exchange mailboxes. Such add-ins run in the new and the classic Outlook, but not on IMAP or other non-Microsoft accounts (except Outlook for Mac with IMAP CloudCache), so leaving out classic Outlook is a scope choice, not a technical limit (D15).
 
 ## Email identity and anchoring
 
@@ -71,7 +84,7 @@ An email is identified by its Message-ID (D2), and each highlight is anchored by
 
 **Identity**
 
-- The `Message-ID` header is the only key; folder and UID change on every move and are never used. Without a Message-ID, a fingerprint hash of Date + From + Subject + the first 1 KB stands in.
+- The `Message-ID` header is the only key; folder and UID change on every move and are never used. A message for which Thunderbird reports no Message-ID can't be annotated (a notice says so). Thunderbird probably invents a Message-ID for such messages; whether it stays the same isn't verified, so in rare corner cases messages without a real Message-ID may share notes. Known and accepted, not planned to be fixed (D2, #26).
 - The same Message-ID in several folders (Sent and Inbox, copies) is one email: its notes show on every copy.
 - One annotation set per email, not per thread, because threads change (D4): one file and one carrier message per email.
 - Links to emails will use `mid:` URIs (RFC 2392).
@@ -84,7 +97,7 @@ An email is identified by its Message-ID (D2), and each highlight is anchored by
 2. Exact quote
 3. Quote with prefix/suffix context
 4. Loose: letters and digits only, case-insensitive
-5. Fuzzy, with `approx-string-match` (Myers' algorithm, as in Hypothesis). Required, because Plain view rewrites HTML (`*` bullets, `/emphasis/`, links as `text <url>`).
+5. Fuzzy, with `approx-string-match` (Myers' algorithm, as in Hypothesis). Overlapping alignments are grouped as one passage before confidence is checked. Among equally good places (also for repeated exact quotes), the one clearly nearest the old position wins (the next at least twice as far); about equally near ones stay orphans. Required, because Plain view rewrites HTML (`*` bullets, `/emphasis/`, links as `text <url>`).
 6. Partial: text that exists in only one view (Simple view shows `display:none` content) highlights what survives, and the note is marked "partly shown".
 7. Orphan: no match at all. The note is never dropped.
 
@@ -237,13 +250,17 @@ We agreed **3 months** in the call. Push back.
 | `annotations[]`: `id`, `quote`, `prefix`, `suffix`, `position`, `created`, `updated` | Anchoring selectors and timestamps per highlight; authoritative for anchoring | D25 |
 | `colour`, `tags` | Colour by name; tags reserved for later | D29 |
 | `text_updated`, `colour_updated` | Own timestamps for text and colour (missing = `updated`) | D32 |
-| `text_by`, `text_base` | Device that last changed the text; hash8 of the synced text it was edited from | D32 |
-| `email_note_updated`, `email_note_colour`, `email_note_colour_updated`, `email_note_by`, `email_note_base` | The same for the whole-email note | D29, D32 |
+| `text_by`, `text_base`, `text_bases` | Device that last changed the text; hash8 of the synced texts its writer remembers, newest first (in carriers; `text_base` is the first) | D32, D45 |
+| `email_note_updated`, `email_note_colour`, `email_note_colour_updated`, `email_note_by`, `email_note_base`, `email_note_bases` | The same for the whole-email note | D29, D32, D45 |
 | `tombstones[]`: `id`, `deleted`, plus a copy of the annotation and its `note` | Deletions that sync, restorable for 30 days | D7, D33 |
 | `deleted_email_note`: `note`, `deleted` | Text of an emptied whole-email note, restorable for 30 days | D33 |
 | `folded`: id → `folded`, `at` | Folded cards, only with the sync-folding setting on | D30 |
 
 **Body rules.** `# Subject`, then the whole-email note, then one marked heading per highlight with a note. The separator line selected by `body_boundary` precedes every annotation heading and terminates the body. This framing is independent of Markdown: literal headings/comments, indentation and unfinished code blocks stay note text. The writer chooses a separator absent from all notes. A missing annotation frame means an empty note; unknown/duplicate frames and a missing final boundary are errors in carriers; an import repairs them instead (each unplaceable section becomes a note of its own, each repair named). Keep structural boundaries intact when editing. Format 2 deliberately replaces the ambiguous version 1 development format; the add-on doesn't read version 1, and `scripts/migrate-format2/` converts existing carriers and exports once. The local database model is unchanged.
+
+**Compatibility rules.** Required: `thundernotes`, `message_id`, `body_boundary`, and per annotation `id` (no spaces or `>`, unique) and `quote`; everything else is optional, with the defaults of the table above (no colour, not folded, times from `created`). A reader refuses a newer format version (the carrier stays unread and listed, D35) and doesn't read version 1. Unknown front-matter fields are ignored and not written back: a client can't rely on another keeping fields of its own. Reference files with their expected result are in `packages/core/test/format-fixtures/` (a plain file, one quoting the format and leaving code unclosed, one with a deleted note); a compatible client reads each to its `.json` and writes the same file back.
+
+**Machine-readable contract.** Draft 2020-12 JSON Schemas describe [format-2 front matter](schemas/format-2-front-matter.schema.json), [export settings](schemas/settings-file-1.schema.json) and [settings-carrier JSON](schemas/settings-carrier-1.schema.json). Tests validate reference files and generated output. [Schema usage and version-change rules](schemas/README.md) explain the reader's additional checks, lenient input handling, unknown fields, independent versions, the existing format-1 conversion and the obligations of a future format 3.
 
 **Export and import.** Without the helper, notes live in IndexedDB. The options page exports a zip of these files, in folders by year and month (`YYYY/MM/YYYY-MM-DD_subject-slug_<hash8>.md`, D5), and imports a zip or single `.md` files. Import merges per annotation id, the newer `updated` wins; equal times with different content mean the file was edited by hand, so the file wins. In a repaired import, each section that couldn't be placed becomes a note of its own (anchored at the quote its heading names, if any), so no newer local note can overwrite it in the merge.
 
@@ -271,13 +288,14 @@ The add-on does this itself through Thunderbird's mail APIs, with the accounts a
 
 **The folder** stays subscribed and visible: spike `spikes/imap-folder` showed that add-ons can't see unsubscribed folders, so D7's hidden folder was impossible (D19). The Experiment keeps it out of global search, and the add-on filters carriers out of its own views; the quick filter inside the folder still finds them, which is accepted. Each session the folder is set up again (excluded from search, "check this folder for new messages" ticked), which repairs settings changed by hand. Other clients see the folder and the carriers' plain-text notice. On Gmail every label also shows in All Mail and web search, so carriers stay visible there (D8).
 
-**Sync rules**
+**Sync rules** (in short; the normative rules with their scenarios are `docs/SYNC.md`, D45)
 
 1. **Push.** A local change is pushed 2 s later: the new revision is imported with a fresh Message-ID, then older revisions are deleted permanently (skipping Trash) and the folder is expunged.
 2. **Pull.** 5 s after startup, every 10 minutes, and 1.5 s after Thunderbird reports new mail or changes in a carrier folder (the Experiment makes Thunderbird check it like the Inbox). Sync reads the `X-Annot-*` headers, merges carriers not yet merged, and redraws open messages.
 3. **Merge per part (D32).** Per annotation id, text, colour and tags are decided separately. Colour: newer wins, never a conflict.
-4. **Text, three-way.** Each device keeps, locally only, the last 10 synced texts per note (`syncHistory`). A carrier names the base it was edited from (`text_base`). The receiver merges line by line against that base with node-diff3: changes to different lines combine; only lines changed differently on both sides become a conflict box. An incoming text this device already synced is stale and ignored. Without a known base, lines both have are kept, additions of either side are kept, and the rest is a conflict.
-5. **Delete.** A deletion is a tombstone with a copy of what was deleted; other devices delete too. Tombstones are dropped after 30 days, and with them the chance to restore (D33). Restored notes count as changed at that moment, so other devices take them back. "Delete for good" purges the copies on one email on all devices: the file records the time (purged\_before), so a copy another device still has doesn't come back; the tombstones stay.
+4. **Text, three-way.** Each device keeps, locally only, the last 10 synced texts per note (`syncHistory`). A carrier names the synced texts its writer remembers, newest first (`text_bases`; `text_base` is the first). The receiver merges line by line with node-diff3 against the newest of them it has too, the most recent version both have seen: changes to different lines combine; only lines changed differently on both sides become a conflict box. An incoming text this device already synced is stale and ignored. Without a known base, lines both have are kept, additions of either side are kept, and the rest is a conflict. Several revisions of one email found at once are merged oldest first.
+5. **Delete.** A deletion is a tombstone with a copy of what was deleted; other devices delete too. The copy goes after 30 days, and with it the chance to restore (D33); the bare record of the deletion stays a year, so a device away that long doesn't bring the note back. Any change made after the deletion keeps the note. Restored notes count as changed at that moment, so other devices take them back. "Delete for good" purges the copies on one email on all devices: the file records the time (purged\_before), so a copy another device still has doesn't come back; the tombstones stay.
+6. **Editing while sync runs.** An open editor isn't replaced by incoming changes; saving combines the edit with what arrived meanwhile, line by line, instead of overwriting it.
 
 **Conflict box.** Plain Markdown in the note, an Obsidian/GitHub-style callout, readable and resolvable by hand anywhere. Versions come newer first, with UTC times, so every device that combines the same two versions writes the same text and devices settle instead of overwriting each other. A version with no lines shows `*(removed)*`.
 
@@ -343,14 +361,9 @@ Every open checklist item in a note is a task, with two optional, independent di
 | Due date | `@2026-10-24` in the file | `@friday`, `@tomorrow`, `@24.10.` with autocomplete | "Fri 24 Oct", red when past (due dates only: dates in open checklist items) |
 | Label | `#name`, any number | autocomplete from labels used before | chips; also usable in ordinary notes |
 
-**Time references**
+**Dates, not times (D38).** A due date is a whole day, written `@2026-10-24`; there is no time of day. Date words typed in the editor (`@friday`, `@tomorrow`, `@3d`, `@24.10.`) become that ISO date at once, so "in 2 days" doesn't drift. A plain `- [ ]` is an undated task: listed under "No date", never overdue. The first idea, `@due(...)` with times and natural language parsed by chrono-node (D10), was replaced by this. Whether reminders bring a time of day is decided with them (stage 3). Still an idea: offering dates mentioned in the email ("deadline 24 Oct") as due dates.
 
-- *Absolute:* `@due(2026-10-20)` or with time.
-- *Relative to now:* `@due(+2d)`, `@due(+3h)`, or natural language typed in the editor ("in 2 days", "next Monday") parsed with chrono-node and **normalised to an absolute date on save**, so "in 2 days" doesn't drift.
-- *Relative to a date in the email:* the add-on detects dates in the message ("deadline 24 Oct", meeting invites) and offers them as anchors, e.g. "remind me 1 day before the date mentioned". A nice-to-have; the core need is a reminder on a certain date (absolute).
-- *No time:* a plain `- [ ]` is an undated task; it appears in the task list but never alerts.
-
-**Reminder delivery:** `alarms` API schedules, `notifications` API shows a desktop notification with "Open email", "Snooze 1h / tomorrow", "Done". Missed reminders (TB was closed) fire on next start.
+**Reminders (planned, D38 stage 3):** a notification on the due day at a set time, with "Open email", snooze and "Done"; missed ones (Thunderbird was closed) at the next start. Still to decide before building: time zones and daylight saving, the time of day, whether every device notifies, how a snooze persists.
 
 **Task view across all emails** — its own tab, opened from the "ThunderNotes Tasks" button in the main toolbar, its icon in the spaces toolbar on the left, or "All tasks…" in the note popup (built in 0.24.0):
 
@@ -367,7 +380,7 @@ Every open checklist item in a note is a task, with two optional, independent di
 
 **Finished date (D38):** ticking a task appends `✅ 2026-10-17` to its line (as the Obsidian Tasks plugin writes it), shown as a small grey "done Sat 17 Oct"; unticking removes it. The Done group sorts by latest or earliest done, due date either way, or label.
 
-**Grouping (D38):** open tasks can be grouped by due date (the default: what's urgent), by label (one section per label: where projects stand) or by email (what is still open in a conversation). Done tasks stay in their own group last.
+**Grouping (D38):** open tasks can be grouped by due date (the default: what's urgent), by label (one section per label: where projects stand) or by email (what is still open in a conversation). Done tasks are hidden, shown inline (in each label's or email's section after its open tasks; grouped by due date they go to the Done group) or in a Done group of their own, last.
 
 **Quick actions (D38):** right-click a task to set its due date (today, tomorrow, in a week, or a typed date word), remove a date, or add or remove a label, each with Undo. Only the task's own lines are rewritten, like ticking; free text editing stays in the note, one click away.
 
@@ -393,7 +406,7 @@ Links point to single emails for now, not conversations.
 
 ## More ideas: Notion and beyond
 
-Links between emails are built (see Links between emails above, D37). Still open: `[[` autocomplete, dragging an email into a note (after a spike), links to whole conversations. The older sketches below remain for reference.
+Links between emails are built (see Links between emails above, D37), and so is the link picker for `[[`, `<<` and Cmd/Ctrl+K (D39). Still open: dragging an email into a note (after a spike), links to whole conversations, short handles and links to a single highlight. The older sketches below remain for reference; where they differ, the sections above describe what is built.
 
 **Referencing other emails (GitHub-style)**
 
@@ -427,7 +440,7 @@ The largest remaining risks are Thunderbird internals used by the Experiment and
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| The Experiment relies on internals (`ThreadPaneColumns`, Gloda indexing, `nsISubscribableServer`) | Column, search exclusion, prompt fetching, re-subscribing or Print with Notes break after a Thunderbird update | One small Experiment, checked on every ESR; the rest uses stable MailExtension APIs. Tested so far only on 158, not yet on the minimum, 153 ESR (D41) |
+| The Experiment relies on internals (`ThreadPaneColumns`, Gloda indexing, `nsISubscribableServer`) | Column, search exclusion, prompt fetching, re-subscribing or Print with Notes break after a Thunderbird update | One small Experiment, checked on every ESR; the rest uses stable MailExtension APIs. Tested on 153 ESR and 158 on macOS, including sync between two computers; not yet on Windows or Linux (D41) |
 | Emails render differently (view mode, remote content, quoted text) | Highlights can't be placed | Normalised selectors, fuzzy and partial matching; orphans listed with a warning, never dropped (D21, D23) |
 | The carrier folder is visible in Thunderbird and other clients | Users delete, rename or unsubscribe it | Clear name and notice; cover in Thunderbird; restored or re-subscribed with an explanation (D20, D27, D36) |
 | Gmail shows every label in All Mail and web search | Carriers visible in Gmail | Accepted (D8); `messages.import` on Gmail still to be tested |
@@ -435,12 +448,27 @@ The largest remaining risks are Thunderbird internals used by the Experiment and
 | Sync fails without anyone noticing | Edits never reach other devices | Red post-it warning for ThunderNotes-specific problems, re-subscribing, sync log (D35, D36) |
 | Thunderbird closes while a note is open | Typed text lost | Draft autosave (D34) |
 | Native helper blocked on managed machines | No live Markdown folder | IndexedDB, IMAP sync and export work fully without it (D16) |
-| Notes hold sensitive mail content | Exposure on the server | Notes stay on the user's own mail server; encryption optional later (D9); a Notion token would stay outside the browser profile (D11) |
+| Notes hold sensitive mail content | Exposure in the profile, exports or on the server | The README states that note text and selectors are plain. An encrypted email's highlight copies decrypted quote and context into those locations; don't annotate it when that is unacceptable. Optional encryption must cover both notes and selectors (D9); a Notion token would stay outside the browser profile (D11). |
 | Numbered sub-lists starting above 1 | Other Markdown tools show them as text | Deliberate CommonMark departure, accepted (D28) |
+
+### If a Thunderbird Experiment function fails
+
+| Experiment function | Effect of failure | User-visible behavior and recovery |
+| --- | --- | --- |
+| `prepareCarrierFolder` | The carrier folder may stay in global search or may not be checked promptly for new mail. | Sync still attempts to read and write notes. An account-specific warning appears in Settings and says carriers may appear in search; setup is retried on the next sync. |
+| `subscribeCarrierFolder` | A previously unsubscribed carrier folder cannot be found or re-subscribed. | Sync stops for that account and the existing sync warning explains the folder problem; it retries on the next scheduled or manual sync. A failed check is not treated as proof that the folder is missing. |
+| `refreshFolder` | New carriers may not be fetched immediately. | The regular ten-minute sync remains the fallback; notes already on this device remain available. |
+| `expungeFolder` | IMAP may retain messages already marked for deletion in the carrier folder. | No note data is discarded by this call; Thunderbird may remove those messages on a later expunge. |
+| `refreshColumn` | The message-list column may not redraw immediately after a tag change. | Notes and tags remain unchanged; Thunderbird's next normal redraw catches up. |
+| `focusMessagePane`, `focusCurrentTab` | A requested pane or tab may not receive focus. | The underlying note action still works; the user can select the pane or tab manually. |
+| `deviceName` | The computer name cannot be read. | Conflict notes use the neutral fallback “This computer”. |
+| Print with Notes | The add-on's extra print command may be unavailable or its dialog may not open. | Thunderbird's ordinary Print command remains available; no notes are changed. |
+
+The Experiment uses Thunderbird internals, so these outcomes are tested on each supported ESR when possible. Search exclusion is the critical exception: a setup failure is retained locally, shown in Settings, and retried instead of being silently swallowed (development issue #12).
 
 ## Status and roadmap
 
-Phases 0, 2 and 4 are done, and most of phase 5 (0.41.0): local annotations, IMAP sync, tasks and links between emails work, and 0.40.0 is published; reminders, the helper and Notion are still ahead. `BACKLOG.md` in the repo tracks the items.
+Phases 0, 2 and 4 are done, and most of phase 5 (0.75.0): local annotations, IMAP sync, tasks and links between emails work, and 0.75.0 is published; reminders, the helper and Notion are still ahead. `BACKLOG.md` in the repo tracks the items.
 
 | Phase | Content | Status |
 | --- | --- | --- |
@@ -448,25 +476,25 @@ Phases 0, 2 and 4 are done, and most of phase 5 (0.41.0): local annotations, IMA
 | 1 Spikes | Anchoring across views (D21), carrier folder (D19), `messages.import` on own server, Experiment for search exclusion, lazy editor loading | Done, except `messages.import` on Gmail and the optional helper skeleton |
 | 2 MVP: local annotations | Highlights, margin cards, live-preview editor, colours, folding, link popup, whole-email note, toolbar list, tag and column, export/import, printing with notes, lines to highlights | Done |
 | 3 Live files + Notes space | Optional native helper: two-way Markdown folder with file watching, Git repository with debounced auto-commit (D6); Notes space tab with search | Not started |
-| 4 IMAP sync | Carriers, revisions and tombstones, three-way merge with conflict boxes, folder restore and re-subscribe, restore of deletions, drafts, sync warning, settings carrier | Done; still open: test with two real Thunderbird installations, check the folder on phone, webmail and server |
+| 4 IMAP sync | Carriers, revisions and tombstones, three-way merge with conflict boxes, folder restore and re-subscribe, restore of deletions, drafts, sync warning, settings carrier | Done, and tested between two computers (153 ESR, macOS); still open: check the folder on phone, webmail and server |
 | 5 Tasks, links, Notion | Dates and labels, task view with filters, grouping, sub-tasks and quick actions; links between emails with backlinks and a link picker; reminders; Notion two-way sync | Tasks and links done (D37–D40); reminders and Notion not started |
-| Release | Package script, release checklist, public repository with one commit per release | Done: 0.40.0 published |
+| Release | Package script, release checklist, public repository with one commit per release | Done: 0.75.0 published |
 | Later: Outlook | Office.js task-pane add-in for Microsoft 365/Exchange, Graph storage in a hidden folder, highlights in the side panel (D15) | Not started |
 
-**Next steps:** reminders for dated tasks (D38 stage 3); testing on Thunderbird 153 ESR (D41); then the whole sub-task tree in the task view, Gmail (D8) or phase 3.
+**Next steps:** reminders for dated tasks (D38 stage 3); then the whole sub-task tree in the task view, Gmail (D8) or phase 3.
 
 ## Decisions
 
-The binding decisions in one line each, as of D36; `docs/DECISIONS.md` has the full text, dates and rejected options.
+The binding decisions in one line each, as of D45; `docs/DECISIONS.md` has the full text, dates and rejected options.
 
 | Question | Decision | D |
 | --- | --- | --- |
 | Platform | Thunderbird MailExtension; one minimal Experiment where no API exists; optional native helper | D1, D14, D19 |
-| Email identity | Message-ID; fingerprint fallback; `mid:` URIs for links | D2 |
+| Email identity | Message-ID (none: not annotated; no fallback planned); `mid:` URIs for links | D2 |
 | Anchoring | W3C TextQuote + TextPosition on the visible text of the current view; fuzzy match required; partial anchors; orphans never dropped, shown at the top with a warning | D3, D21, D23 |
 | Note file granularity | One annotation set, file and carrier per email (threads change) | D4 |
 | File format | Markdown per email; all machine data in YAML front matter; notes in `## “quote” <!-- tn:id -->` sections; same for export, carrier and Git folder; export adds `settings.json` | D5, D25 |
-| Local versioning | Markdown folder is a Git repository, auto-committed by the helper | D6 |
+| Local versioning | Markdown folder is a Git repository, auto-committed by the helper (later; history only, merging is D32/D33) | D6 |
 | IMAP sync | Inside the add-on via Thunderbird's mail APIs; carriers with `X-Annot-*` headers and the Markdown file attached; update = new revision + delete old; delete = tombstone, 30 days | D7, D14 |
 | Sync scope and folder | Per IMAP account, folder `ThunderNotes` at the root; local folders and POP stay local; Experiment makes Thunderbird check it promptly; carriers explained by a cover | D27 |
 | Carrier folder | Subscribed and visible; kept out of global search by the Experiment | D19 |
@@ -476,7 +504,7 @@ The binding decisions in one line each, as of D36; `docs/DECISIONS.md` has the f
 | Notion | Not in the MVP; eventually two-way, token outside the browser profile | D11 |
 | Name and repositories | ThunderNotes; public `flofrie/thundernotes` (one commit per release), private `flofrie/thundernotes-dev` | D12 |
 | Language | TypeScript monorepo: `core`, `thunderbird`, `helper`, later `outlook` | D13 |
-| Outlook | Later: modern add-in for Microsoft 365/Exchange, notes via Graph; no IMAP accounts, no classic Outlook | D15 |
+| Outlook | Later: modern add-in for Microsoft 365/Exchange, notes via Graph; no IMAP accounts (unsupported by Microsoft), no classic Outlook (a scope choice) | D15 |
 | Usability | Installs like any add-on: no separate login, software or setup for core features | D16 |
 | Add-on ID | `thundernotes@webterminate.com`, never changes | D17 |
 | Licence | MPL-2.0, header in every source file | D18 |
@@ -499,3 +527,7 @@ The binding decisions in one line each, as of D36; `docs/DECISIONS.md` has the f
 | Link picker | `[[`, `<<` or Cmd/Ctrl+K find emails to link to by subject, sender or date | D39 |
 | Label colours and order | Colours and order of labels the same on all devices, in a settings carrier | D40 |
 | Minimum Thunderbird | 153, the current ESR | D41 |
+| Notes and accounts | Notes belong to an email in one account (Message-ID + account), synced only there; moves take notes along; label settings per account | D42 |
+| Deleted emails | Emails in the Trash or deleted for good are left alone: no tasks, suggestions or backlinks; notes kept | D43 |
+| Emails not found | Notes whose email can't be found are marked and listed in the settings, deletable | D44 |
+| Sync and merge rules | Normative specification `docs/SYNC.md` with scenario tests: bases, merge order, cleanup, editing while sync runs | D45 |

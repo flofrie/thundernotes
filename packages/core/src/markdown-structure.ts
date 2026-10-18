@@ -27,6 +27,22 @@ export function codeLines(source: string): Set<number> {
   return lines;
 }
 
+/** Whitespace that keeps an empty visual paragraph in its enclosing quote/list containers. */
+function paragraphPrefix(lines: string[], at: number, tokens: Token[]): string {
+  const quoteDepth = tokens.filter((token) => token.type === "blockquote_open" && token.map && token.map[0] <= at && at < token.map[1]).length;
+  const quote = "> ".repeat(quoteDepth);
+  const item = tokens
+    .filter((token) => token.type === "list_item_open" && token.map && token.map[0] <= at && at < token.map[1])
+    .sort((a, b) => b.level - a.level)[0];
+  if (!item?.map) return quote;
+  const line = lines[item.map[0]] ?? "";
+  const afterQuote = line.replace(/^(?: {0,3}>[ \t]?)+/, "");
+  const marker = /^( *)(?:[-+*]|\d{1,9}[.)])([ \t]+)/.exec(afterQuote);
+  if (!marker) return quote;
+  // Keep the paragraph at the item's content column, without repeating the list marker.
+  return quote + " ".repeat(marker[1]!.length + marker[0].length);
+}
+
 export interface MarkdownEnvironment extends Env {
   /** Prepared line -> original source line. */
   lineOf: number[];
@@ -38,22 +54,36 @@ export interface MarkdownEnvironment extends Env {
  * Keep the existing line-for-line note layout. Record positions while inserting blank-line
  * paragraphs, so rendered controls always refer to the original Markdown, never the prepared text.
  */
-export function prepareMarkdown(source: string): { text: string; env: MarkdownEnvironment } {
-  const code = codeLines(source);
+export function prepareMarkdown(source: string): {
+  text: string;
+  env: MarkdownEnvironment;
+  code: Set<number>;
+  taskLines: Set<number>;
+} {
+  const sourceTokens = syntax().parse(source, {});
+  const code = new Set<number>();
+  for (const token of sourceTokens) {
+    if ((token.type === "fence" || token.type === "code_block") && token.map) {
+      for (let i = token.map[0]; i < token.map[1]; i++) code.add(i);
+    }
+  }
+  const sourceLines = source.split("\n");
   const lines: string[] = [];
+  const preparedCode = new Set<number>();
   const env: MarkdownEnvironment = { lineOf: [], starts: {} };
-  for (const [i, line] of source.split("\n").entries()) {
+  for (const [i, line] of sourceLines.entries()) {
+    const preparedLine = lines.length;
     if (!code.has(i) && !line.trim()) {
-      lines.push("", "\u00a0", "");
+      lines.push("", `${paragraphPrefix(sourceLines, i, sourceTokens)}\u00a0`, "");
       env.lineOf.push(i, i, i);
     } else {
       lines.push(line);
       env.lineOf.push(i);
+      if (code.has(i)) preparedCode.add(preparedLine);
     }
   }
   // The supported dialect allows a numbered sublist to start at any number. Normalize its
   // first marker for parsing, then let rendering restore the displayed start attribute.
-  const preparedCode = codeLines(lines.join("\n"));
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     const m = preparedCode.has(i) ? null : /^(\s*)(\d{1,9})([.)])(?=\s|$)/.exec(line);
@@ -68,7 +98,19 @@ export function prepareMarkdown(source: string): { text: string; env: MarkdownEn
       break;
     }
   }
-  return { text: lines.join("\n"), env };
+  const text = lines.join("\n");
+  const tokens = syntax().parse(text, env);
+  const preparedCodeLines = new Set<number>();
+  for (const token of tokens) {
+    if ((token.type === "fence" || token.type === "code_block") && token.map) {
+      for (let i = token.map[0]; i < token.map[1]; i++) preparedCodeLines.add(env.lineOf[i]!);
+    }
+  }
+  const taskLines = new Set<number>();
+  for (const { item } of checklistTokens(tokens)) {
+    if (item.map) taskLines.add(env.lineOf[item.map[0]]!);
+  }
+  return { text, env, code: preparedCodeLines, taskLines };
 }
 
 /** Exactly the list items drawn as checkboxes; shared by extraction and the renderer plugin. */
@@ -83,10 +125,5 @@ export function* checklistTokens(tokens: Token[]): Generator<{ item: Token; inli
 }
 
 export function taskSourceLines(source: string): Set<number> {
-  const { text, env } = prepareMarkdown(source);
-  const out = new Set<number>();
-  for (const { item } of checklistTokens(syntax().parse(text, env))) {
-    if (item.map) out.add(env.lineOf[item.map[0]]!);
-  }
-  return out;
+  return prepareMarkdown(source).taskLines;
 }

@@ -34,7 +34,12 @@ export interface CardActions {
   render(md: string): Promise<string>;
   /** Clipboard via the background, for the editor's Cut/Copy/Paste menu. */
   clipboard: Clipboard;
-  save(id: string, bodyMd: string): Promise<void>;
+  /**
+   * Saves a note's text, written starting from `base` (the text shown when editing began). If
+   * the stored text changed since (an edit from another device arrived meanwhile), both are
+   * combined, not overwritten (docs/SYNC.md). Resolves with the text now stored.
+   */
+  save(id: string, bodyMd: string, base: string): Promise<string>;
   remove(id: string): Promise<void>;
   openLink(url: string): void;
   /** Setting: Cmd/Ctrl+L turns a ticked checkbox back into text. */
@@ -176,11 +181,15 @@ export const CARD_CSS = `
      one marker width in, exactly as the editor draws them (live/editor.ts, MARK). */
   .note ul, .note ol { list-style: none; }
   .note li { padding-left: 1.4em; }
+  /* markdown-it wraps loose list-item content in paragraphs. Keep the first paragraph inline so
+     the marker (and task checkbox) shares the text's first line; later paragraphs stay blocks. */
+  .note li > p:first-child { display: inline; }
   .note ul > li::before { content: "•"; display: inline-block; width: 1.4em; margin-left: -1.4em; }
   .note ol > li::before { content: counter(list-item) "."; display: inline-block; width: 1.4em; margin-left: -1.4em;
                           font-variant-numeric: tabular-nums; }
   .note ul > li.task::before { content: none; }
-  .note ul > li.task > .task-box:first-child { margin-left: -1.4em; }
+  .note ul > li.task > .task-box:first-child,
+  .note ul > li.task > p:first-child > .task-box:first-child { margin-left: -1.4em; }
   /* Quotes: the bar is drawn on the quoted lines themselves, so a nested quote (> >) has one bar
      that moves in with its text, one step per level (as the editor), not a bar per level. */
   .note blockquote { opacity: 0.85; }
@@ -849,11 +858,11 @@ export class NoteCard {
     if (fromEditor) this.actions.draft(id, bodyMd); // the latest text, before anything can fail
     let failed = false;
     this.actions
-      .save(id, bodyMd)
-      .then(async () => {
-        this.annotation = { ...this.annotation, bodyMd };
+      .save(id, bodyMd, this.annotation.bodyMd)
+      .then(async (stored) => {
+        this.annotation = { ...this.annotation, bodyMd: stored };
         if (fromEditor) this.actions.draft(id, null);
-        await this.renderInto(this.note, bodyMd);
+        await this.renderInto(this.note, stored);
       })
       .catch((e) => {
         console.error("ThunderNotes:", e);

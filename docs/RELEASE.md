@@ -30,6 +30,8 @@ default device name. See `docs/DECISIONS.md` (D19, D20, D23, D26, D36).
 
 1. **Version.** `packages/thunderbird/manifest.json` has the version to publish (higher than the
    last published one). The add-on ID `thundernotes@webterminate.com` never changes (D17).
+   `strict_max_version` covers the newest Thunderbird you tested (required by ATN because of the
+   Experiment, D41).
 2. **Tests.** `npm test` passes (vitest's own exit code; also no "Errors" / unhandled errors).
 3. **Committed.** Everything is committed: `npm run package` refuses otherwise, as the source zip
    must match the add-on.
@@ -45,17 +47,28 @@ default device name. See `docs/DECISIONS.md` (D19, D20, D23, D26, D36).
    - an IMAP account: the ThunderNotes folder appears, a note syncs (second profile or device);
    - Print with Notes; export and import (with settings);
    - the options page; restart Thunderbird: the add-on and the notes are still there.
+   Run this on the minimum supported Thunderbird version. Add each completed run to the tested-version register below; a second profile is useful for the checklist, but it is not evidence for sync between two physical computers.
 6. **Release notes.** What changed since the last published version, in plain words.
 7. **Publish.**
-   - addons.thunderbird.net: upload the `.xpi`, then the source zip with this file's build
-     instructions; the Experiment and the bundled scripts are reviewed by people, so allow time.
-     Before the first submission, check ATN's current policies for add-ons with Experiments
-     (for example whether a `strict_max_version` is required).
+   - addons.thunderbird.net: follow `docs/ATN-SUBMISSION.md` (steps, listing texts, privacy
+     policy, notes to reviewers). Upload the `.xpi` and the source zip; the source zip's README is
+     `docs/BUILDING.md` with the versions and the `.xpi`'s checksum filled in. The `.xpi` is
+     reproducible: CI prints the same checksum as `npm run package`. The Experiment and the bundled
+     scripts are reviewed by people, so allow time.
    - Or self-hosted: attach the `.xpi` to a release (users install it from file); automatic updates
      then need an `update_url` in the manifest and an `updates.json` next to the releases.
 8. **Tag.** `git tag v<version> && git push --tags` (in the private repository).
 9. **Public repository.** `scripts/publish-public.sh <version>` shows what would be published;
    with `--push` it publishes. The public repository `flofrie/thundernotes` gets one commit per
    release ("ThunderNotes <version>"), made from the private repository's current commit without
-   `CLAUDE.md` and `spikes/` (the private history stays private), tagged `v<version>`, and a GitHub
+   `spikes/` (the private history stays private), tagged `v<version>`, and a GitHub
    release with the `.xpi` from step 4.
+
+## Tested-version register
+
+Record the exact Thunderbird build, OS, mail server, date, test profile/device setup, and result for each real install test. Keep missing details explicit; do not infer a clean-profile or cross-computer test from unit tests or a second profile.
+
+| Thunderbird | OS | Mail server | Date | Setup and result |
+| --- | --- | --- | --- | --- |
+| 153 ESR (exact build not recorded) | macOS on both computers (versions not recorded) | The owner's own mail server (IMAP) | 2026-10-18 | Pass. The owner ran the steps in development issue #24: the release checklist above, and notes syncing between two physical computers on the same IMAP accounts. ThunderNotes version not recorded. |
+| 158 (exact build not recorded) | Not recorded | Not recorded | Not recorded | Existing development record says 158 was tested; the test scope/result was not recorded. Clean-profile and two-physical-computer evidence is not established by the available record. |

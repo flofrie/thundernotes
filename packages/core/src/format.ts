@@ -31,6 +31,7 @@ interface FrontAnnotation {
   text_updated?: string;
   text_by?: string;
   text_base?: string;
+  text_bases?: string[];
   colour_updated?: string;
 }
 
@@ -50,6 +51,7 @@ interface FrontMatter {
   email_note_colour_updated?: string;
   email_note_by?: string;
   email_note_base?: string;
+  email_note_bases?: string[];
   annotations?: FrontAnnotation[];
   tombstones?: Array<{ id: string; deleted: string; note?: string } & Partial<FrontAnnotation>>;
   deleted_email_note?: { note?: string; deleted: string };
@@ -92,6 +94,7 @@ function toFront(a: Annotation): FrontAnnotation {
     ...(a.textUpdated && a.textUpdated !== a.updated && { text_updated: a.textUpdated }),
     ...(a.textBy && { text_by: a.textBy }),
     ...(a.textBase && { text_base: a.textBase }),
+    ...(a.textBases && a.textBases.length > 1 && { text_bases: a.textBases }),
     ...(a.colourUpdated && a.colourUpdated !== a.updated && { colour_updated: a.colourUpdated }),
   };
 }
@@ -123,6 +126,7 @@ function fromFront(fa: FrontAnnotation, bodyMd: string, created: string): Annota
   if (fa.text_updated !== undefined) annotation.textUpdated = time(fa.text_updated, annotation.updated);
   if (fa.text_by) annotation.textBy = String(fa.text_by);
   if (fa.text_base) annotation.textBase = String(fa.text_base);
+  if (Array.isArray(fa.text_bases) && fa.text_bases.length) annotation.textBases = fa.text_bases.map(String);
   if (fa.colour_updated !== undefined) annotation.colourUpdated = time(fa.colour_updated, annotation.updated);
   if (Array.isArray(fa.tags) && fa.tags.length) annotation.tags = fa.tags.map(String);
   return annotation;
@@ -230,6 +234,7 @@ export function toMarkdown(set: AnnotationSet): string {
     ...(set.emailNoteColourUpdated && { email_note_colour_updated: set.emailNoteColourUpdated }),
     ...(set.emailNoteBy && { email_note_by: set.emailNoteBy }),
     ...(set.emailNoteBase && { email_note_base: set.emailNoteBase }),
+    ...(set.emailNoteBases && set.emailNoteBases.length > 1 && { email_note_bases: set.emailNoteBases }),
     annotations: set.annotations.map(toFront),
     body_boundary: boundary,
   };
@@ -339,6 +344,7 @@ export function fromMarkdown(text: string, options: { onProblem?: (message: stri
   if (front.email_note_colour_updated !== undefined) set.emailNoteColourUpdated = time(front.email_note_colour_updated, created);
   if (front.email_note_by) set.emailNoteBy = String(front.email_note_by);
   if (front.email_note_base) set.emailNoteBase = String(front.email_note_base);
+  if (Array.isArray(front.email_note_bases) && front.email_note_bases.length) set.emailNoteBases = front.email_note_bases.map(String);
   if (Array.isArray(front.tombstones) && front.tombstones.length) {
     set.tombstones = front.tombstones
       .filter((t) => t && t.id !== undefined)
@@ -478,8 +484,9 @@ interface NoteText {
 }
 
 /**
- * A note's text from two versions (D32): a three-way merge against the base the incoming
- * version names, looked up in this device's sync history. Without a known base: on import,
+ * A note's text from two versions (D32): a three-way merge against a base the incoming version
+ * names: the newest of its bases (its writer's synced texts, newest first) that this device has
+ * too, its current text or its sync history; the most recent version both have seen. Without a known base: on import,
  * equal times with different text mean a file edited by hand (editors don't touch the
  * timestamps), which wins and is stamped `now`; an incoming text we already synced is stale.
  * With no base found: in sync, lines both have are kept and the rest becomes a conflict box
@@ -489,15 +496,16 @@ interface NoteText {
 function mergeNoteText(
   history: string[],
   mine: NoteText,
-  theirs: NoteText & { base?: string },
+  theirs: NoteText & { bases: string[] },
   now: string,
   mode: MergeMode
 ): NoteText & { conflict: boolean } {
   const newer = theirs.at > mine.at ? theirs : mine;
   if (mine.text === theirs.text) return { ...newer, text: mine.text, conflict: false };
   let base: string | undefined;
-  if (theirs.base !== undefined) {
-    base = hash8(mine.text) === theirs.base ? mine.text : history.find((t) => hash8(t) === theirs.base);
+  for (const h of theirs.bases) {
+    base = hash8(mine.text) === h ? mine.text : history.find((t) => hash8(t) === h);
+    if (base !== undefined) break;
   }
   if (base === undefined && mine.at === theirs.at && mode === "import") return { text: theirs.text, at: now, by: theirs.by, conflict: false };
   if (base === undefined && history.includes(theirs.text)) return { ...mine, conflict: false };
@@ -507,6 +515,12 @@ function mergeNoteText(
   if (merged.text === theirs.text) return { ...theirs, conflict: false };
   return { text: merged.text, at: newer.at, by: newer.by, conflict: merged.conflict };
 }
+
+/** Equal times in sync: the same choice on every device whichever side is "theirs" (the greater value). */
+const tieBreak = (theirs: string | undefined, mine: string | undefined) => (theirs ?? "") > (mine ?? "");
+
+/** The bases a version names, newest first (older writers name only the newest). */
+const basesOf = (bases: string[] | undefined, base: string | undefined) => (bases?.length ? bases : base ? [base] : []);
 
 /** Max of ISO timestamps. */
 const latest = (...times: (string | undefined)[]) => times.filter((t): t is string => !!t).reduce((m, t) => (t > m ? t : m), "");
@@ -522,15 +536,17 @@ function mergeAnnotation(
   const text = mergeNoteText(
     history,
     { text: mine.bodyMd, at: mine.textUpdated ?? mine.updated, by: mine.textBy },
-    { text: theirs.bodyMd, at: theirs.textUpdated ?? theirs.updated, by: theirs.textBy, base: theirs.textBase },
+    { text: theirs.bodyMd, at: theirs.textUpdated ?? theirs.updated, by: theirs.textBy, bases: basesOf(theirs.textBases, theirs.textBase) },
     now,
     mode
   );
   const mineColourAt = mine.colourUpdated ?? mine.updated;
   const theirColourAt = theirs.colourUpdated ?? theirs.updated;
-  // Equal times, different colour: edited by hand, the incoming file wins.
-  const takeColour = theirColourAt > mineColourAt || (theirColourAt === mineColourAt && theirs.colour !== mine.colour);
-  const colourAt = takeColour && theirColourAt === mineColourAt ? now : latest(mineColourAt, theirColourAt);
+  // Equal times, different colour: on import a file edited by hand, which wins (stamped now);
+  // in sync two choices at the same moment, decided the same way on every device.
+  const takeColour =
+    theirColourAt > mineColourAt || (theirColourAt === mineColourAt && theirs.colour !== mine.colour && (mode === "import" || tieBreak(theirs.colour, mine.colour)));
+  const colourAt = takeColour && theirColourAt === mineColourAt && mode === "import" ? now : latest(mineColourAt, theirColourAt);
   const a: Annotation = {
     ...mine,
     bodyMd: text.text,
@@ -547,6 +563,7 @@ function mergeAnnotation(
   if (text.by) a.textBy = text.by;
   else delete a.textBy;
   delete a.textBase;
+  delete a.textBases;
   a.updated = latest(mine.updated, theirs.updated, a.textUpdated, a.colourUpdated);
   return { a, conflict: text.conflict };
 }
@@ -581,6 +598,7 @@ export function mergeSets(
     if (!mine) {
       const fresh = { ...a };
       delete fresh.textBase;
+      delete fresh.textBases;
       byId.set(a.id, fresh);
       added++;
     } else {
@@ -609,7 +627,7 @@ export function mergeSets(
   const note = mergeNoteText(
     history[EMAIL_NOTE_KEY] ?? [],
     { text: local.emailNoteMd ?? "", at: localNoteAt, by: local.emailNoteBy },
-    { text: incoming.emailNoteMd ?? "", at: incomingNoteAt, by: incoming.emailNoteBy, base: incoming.emailNoteBase },
+    { text: incoming.emailNoteMd ?? "", at: incomingNoteAt, by: incoming.emailNoteBy, bases: basesOf(incoming.emailNoteBases, incoming.emailNoteBase) },
     now,
     mode
   );
@@ -620,7 +638,8 @@ export function mergeSets(
   const localColourAt = local.emailNoteColourUpdated ?? localNoteAt;
   const incomingColourAt = incoming.emailNoteColourUpdated ?? incomingNoteAt;
   const takeColour =
-    (incoming.emailNoteColour ?? "") !== (local.emailNoteColour ?? "") && incomingColourAt >= localColourAt;
+    (incoming.emailNoteColour ?? "") !== (local.emailNoteColour ?? "") &&
+    (incomingColourAt > localColourAt || (incomingColourAt === localColourAt && (mode === "import" || tieBreak(incoming.emailNoteColour, local.emailNoteColour))));
   if (takeColour) updated++;
 
   const newTombstones = tombstones.length !== (local.tombstones?.length ?? 0) || removed > 0;
@@ -645,6 +664,7 @@ export function mergeSets(
   if (note.by) set.emailNoteBy = note.by;
   else delete set.emailNoteBy;
   delete set.emailNoteBase;
+  delete set.emailNoteBases;
   const emailNoteColour = takeColour ? incoming.emailNoteColour : local.emailNoteColour;
   if (emailNoteColour) set.emailNoteColour = emailNoteColour;
   else delete set.emailNoteColour;
@@ -672,23 +692,21 @@ export function mergeSets(
  */
 export function withBases(set: AnnotationSet): AnnotationSet {
   const history = set.syncHistory ?? {};
-  const base = (key: string) => {
-    const list = history[key];
-    return list?.length ? hash8(list[list.length - 1]!) : undefined;
-  };
+  // Every synced text remembered, newest first: the receiver takes the newest it has too.
+  const bases = (key: string) => [...new Set((history[key] ?? []).map(hash8))].reverse();
   const out: AnnotationSet = {
     ...set,
     annotations: set.annotations.map((a) => {
-      const b = base(a.id);
+      const b = bases(a.id);
       const copy = { ...a };
-      if (b) copy.textBase = b;
-      else delete copy.textBase;
+      if (b.length) (copy.textBase = b[0]!), (copy.textBases = b);
+      else delete copy.textBase, delete copy.textBases;
       return copy;
     }),
   };
-  const emailBase = base(EMAIL_NOTE_KEY);
-  if (emailBase) out.emailNoteBase = emailBase;
-  else delete out.emailNoteBase;
+  const emailBases = bases(EMAIL_NOTE_KEY);
+  if (emailBases.length) (out.emailNoteBase = emailBases[0]!), (out.emailNoteBases = emailBases);
+  else delete out.emailNoteBase, delete out.emailNoteBases;
   delete out.syncHistory;
   return out;
 }
@@ -739,7 +757,7 @@ export function deleteAnnotation(set: AnnotationSet, id: string, now = new Date(
   const { [id]: _gone, ...folded } = set.folded ?? {};
   const gone = set.annotations.find((a) => a.id === id);
   const copy = gone && { ...gone };
-  if (copy) delete copy.textBase;
+  if (copy) delete copy.textBase, delete copy.textBases;
   const next: AnnotationSet = {
     ...set,
     annotations: set.annotations.filter((a) => a.id !== id),

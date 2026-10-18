@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "email": {
+    "messageId": "CAF3xQ9b1k@mail.example.com",
+    "subject": "Contract renewal – draft v3",
+    "from": "Anna Berger <anna@example.com>",
+    "date": "2026-10-12T08:14:00.000Z",
+    "folderHint": "/INBOX"
+  },
+  "rev": 3,
+  "created": "2026-10-12T09:30:00.000Z",
+  "updated": "2026-10-14T16:05:00.000Z",
+  "annotations": [
+    {
+      "id": "7f3c9a10-5b2e-4c1d-9a8f-0e6d2c4b1a37",
+      "selectors": [
+        {
+          "type": "TextQuoteSelector",
+          "exact": "termination period of 6 months",
+          "prefix": "the contract has a ",
+          "suffix": ", which we"
+        },
+        {
+          "type": "TextPositionSelector",
+          "start": 412,
+          "end": 442
+        }
+      ],
+      "bodyMd": "Too long: ask for **3 months**.",
+      "created": "2026-10-12T09:30:00.000Z",
+      "updated": "2026-10-14T16:05:00.000Z",
+      "colour": "yellow"
+    },
+    {
+      "id": "0b7d2e44-1c9a-4f3e-8d21-5a6b7c8d9e0f",
+      "selectors": [
+        {
+          "type": "TextQuoteSelector",
+          "exact": "invoice by 15 November",
+          "prefix": " please send the ",
+          "suffix": ". Thank"
+        },
+        {
+          "type": "TextPositionSelector",
+          "start": 880,
+          "end": 902
+        }
+      ],
+      "bodyMd": "",
+      "created": "2026-10-12T09:30:00.000Z",
+      "updated": "2026-10-12T09:30:00.000Z",
+      "colour": "green"
+    }
+  ],
+  "emailNoteMd": "Call Anna before Friday.\n\n- [ ] Send the revised contract @2026-10-24 #contract"
+}

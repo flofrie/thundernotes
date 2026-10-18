@@ -1,0 +1,18 @@
+{
+  "thundernotes": "settings",
+  "version": 1,
+  "exported": "2026-10-18T12:00:00.000Z",
+  "options": { "hideCurrentYear": false, "lastColour": "green" },
+  "labels": { "version": 1, "labelColours": {} },
+  "labelsByAccount": {
+    "you@example.com": {
+      "version": 1,
+      "labelColours": {
+        "work": { "colour": "blue", "updated": "2026-10-18T09:00:00.000Z" }
+      },
+      "labelOrder": { "mode": "az", "custom": [], "updated": "2026-10-18T09:00:00.000Z" }
+    }
+  },
+  "taskView": { "groupBy": "label" },
+  "collapsed": { "<original@example.com> note-1": true }
+}

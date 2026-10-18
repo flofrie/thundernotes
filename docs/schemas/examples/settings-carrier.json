@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "labelColours": {
+    "work": { "colour": "blue", "updated": "2026-10-18T09:00:00.000Z" },
+    "home": { "colour": null, "updated": "2026-10-18T10:00:00.000Z" }
+  },
+  "labelOrder": {
+    "mode": "custom",
+    "custom": ["home", "work"],
+    "updated": "2026-10-18T10:00:00.000Z"
+  }
+}

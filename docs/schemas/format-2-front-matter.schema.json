@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/flofrie/thundernotes/main/docs/schemas/format-2-front-matter.schema.json",
+  "title": "ThunderNotes format 2 YAML front matter",
+  "description": "Validate the YAML front matter after parsing as JSON-compatible data. Body framing, unique annotation IDs and merge semantics require the format reader; see README.md.",
+  "type": "object",
+  "required": ["thundernotes", "message_id", "body_boundary"],
+  "properties": {
+    "thundernotes": { "const": 2 },
+    "message_id": { "type": "string", "minLength": 1 },
+    "subject": { "type": "string" },
+    "from": { "type": "string" },
+    "date": { "$ref": "#/$defs/timestamp" },
+    "folder_hint": { "type": "string" },
+    "account": { "type": "string" },
+    "created": { "$ref": "#/$defs/timestamp" },
+    "updated": { "$ref": "#/$defs/timestamp" },
+    "rev": { "type": "integer", "minimum": 0 },
+    "body_boundary": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "email_note_updated": { "$ref": "#/$defs/timestamp" },
+    "email_note_colour": { "type": "string" },
+    "email_note_colour_updated": { "$ref": "#/$defs/timestamp" },
+    "email_note_by": { "type": "string" },
+    "email_note_base": { "$ref": "#/$defs/hash" },
+    "email_note_bases": { "$ref": "#/$defs/bases" },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "$ref": "#/$defs/annotationFields",
+        "required": ["id", "quote"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "quote": { "type": "string" }
+        }
+      }
+    },
+    "tombstones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "$ref": "#/$defs/annotationFields",
+        "required": ["id", "deleted"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "deleted": { "$ref": "#/$defs/timestamp" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "deleted_email_note": {
+      "type": "object",
+      "required": ["deleted"],
+      "properties": {
+        "deleted": { "$ref": "#/$defs/timestamp" },
+        "note": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "purged_before": { "$ref": "#/$defs/timestamp" },
+    "folded": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["folded", "at"],
+        "properties": {
+          "folded": { "type": "boolean" },
+          "at": { "$ref": "#/$defs/timestamp" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 UTC timestamp, with optional fractional seconds. The pattern checks its shape, not calendar validity.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "id": { "type": "string", "minLength": 1, "pattern": "^[^\\s>]+$" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
+    "bases": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/hash" } },
+    "annotationFields": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "quote": { "type": "string" },
+        "prefix": { "type": "string" },
+        "suffix": { "type": "string" },
+        "position": {
+          "type": "array",
+          "prefixItems": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "integer", "minimum": 0 }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "colour": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "created": { "$ref": "#/$defs/timestamp" },
+        "updated": { "$ref": "#/$defs/timestamp" },
+        "text_updated": { "$ref": "#/$defs/timestamp" },
+        "text_by": { "type": "string" },
+        "text_base": { "$ref": "#/$defs/hash" },
+        "text_bases": { "$ref": "#/$defs/bases" },
+        "colour_updated": { "$ref": "#/$defs/timestamp" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

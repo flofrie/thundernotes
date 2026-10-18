@@ -15,7 +15,7 @@ set -eu
 
 PUBLIC_URL="https://github.com/flofrie/thundernotes.git"
 PUBLIC_REPO="flofrie/thundernotes"
-EXCLUDE="CLAUDE.md spikes"
+EXCLUDE="spikes"
 NAME="Florian Friedrich"
 EMAIL="flofrie@users.noreply.github.com"
 

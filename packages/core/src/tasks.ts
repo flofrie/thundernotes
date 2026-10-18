@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-import { codeLines, taskSourceLines } from "./markdown-structure.js";
+import { codeLines, prepareMarkdown } from "./markdown-structure.js";
 
 /**
  * Tasks (D38): every checklist item is a task, with an optional due date `@2026-10-24` and any
@@ -408,7 +408,8 @@ function locate(lines: string[], task: { line: number; raw: string }): number {
  * the indented lines after it (not its sub-items, which are items of their own).
  */
 export function tasksIn(md: string): TaskItem[] {
-  return findTasks(md, codeLines(md), taskSourceLines(md));
+  const prepared = prepareMarkdown(md);
+  return findTasks(md, prepared.code, prepared.taskLines);
 }
 
 /**
@@ -438,8 +439,8 @@ function findTasks(md: string, code: Set<number>, taskLines?: Set<number>): Task
 
 /** The checklist item whose lines (its own and those continuing its text) include `line`; null if none. */
 export function taskAt(md: string, line: number): TaskItem | null {
-  const code = codeLines(md);
-  return taskAmong(md, line, findTasks(md, code, taskSourceLines(md)), code);
+  const prepared = prepareMarkdown(md);
+  return taskAmong(md, line, findTasks(md, prepared.code, prepared.taskLines), prepared.code);
 }
 
 /**

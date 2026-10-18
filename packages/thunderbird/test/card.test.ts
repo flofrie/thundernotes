@@ -14,7 +14,7 @@ import { convertLooseDates, isoDate, looseDates, renderMarkdown, type Annotation
 (globalThis as any).browser = { runtime: { getURL: () => "/not-there.js" } };
 (globalThis as any).matchMedia ??= () => ({ matches: false, addEventListener() {} }); // jsdom has neither
 (globalThis as any).ResizeObserver ??= class { observe() {} disconnect() {} };
-const { NoteCard } = await import("../src/card.js");
+const { CARD_CSS, NoteCard } = await import("../src/card.js");
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 /** Until the card edits (the textarea editor opens once loading the live editor has failed). */
@@ -34,6 +34,7 @@ function card(bodyMd: string, save: (id: string, md: string) => Promise<void> = 
     save: async (id: string, md: string) => {
       saved.push(md);
       await save(id, md);
+      return md;
     },
     remove: async () => {},
     openLink: () => {},
@@ -60,6 +61,11 @@ function card(bodyMd: string, save: (id: string, md: string) => Promise<void> = 
   document.body.append(c.el);
   return { c, drafts, saved, copied };
 }
+
+it("keeps loose-list markers and task boxes aligned with paragraph-wrapped text", () => {
+  expect(CARD_CSS).toContain(".note li > p:first-child { display: inline; }");
+  expect(CARD_CSS).toContain(".note ul > li.task > p:first-child > .task-box:first-child");
+});
 
 describe("note card", () => {
   it("ticks the checklist item clicked, not one in a code block or a quote before it (issue #5)", async () => {

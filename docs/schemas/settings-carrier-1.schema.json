@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/flofrie/thundernotes/main/docs/schemas/settings-carrier-1.schema.json",
+  "title": "ThunderNotes settings carrier JSON, version 1",
+  "description": "The JSON attachment of one account's settings carrier (D40, D42). Also used for labels and labelsByAccount entries in an export's settings.json.",
+  "type": "object",
+  "required": ["version", "labelColours"],
+  "properties": {
+    "version": { "const": 1 },
+    "labelColours": {
+      "type": "object",
+      "description": "Keys are labels in lower case, without #. null records an explicit choice of no colour.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["colour", "updated"],
+        "properties": {
+          "colour": { "enum": ["yellow", "green", "blue", "pink", "orange", "red", "purple", "grey", null] },
+          "updated": { "$ref": "#/$defs/timestamp" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "labelOrder": {
+      "type": "object",
+      "required": ["mode", "custom", "updated"],
+      "properties": {
+        "mode": { "enum": ["used", "az", "za", "custom"] },
+        "custom": { "type": "array", "items": { "type": "string" } },
+        "updated": { "$ref": "#/$defs/timestamp" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 UTC timestamp; shape only, not calendar validity.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    }
+  }
+}

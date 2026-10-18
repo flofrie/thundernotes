@@ -14,8 +14,9 @@ export type ToBackground =
   | { type: "load" }
   | { type: "add"; annotation: Annotation }
   | { type: "remove"; id: string }
-  | { type: "update"; id: string; bodyMd: string }
-  | { type: "setEmailNote"; md: string }
+  /** `base`: the text the edit started from; a text changed meanwhile is combined with it (docs/SYNC.md). */
+  | { type: "update"; id: string; bodyMd: string; base?: string }
+  | { type: "setEmailNote"; md: string; base?: string }
   | { type: "setColour"; id: string; colour: string }
   /** The emails whose notes link to this one (D37). */
   | { type: "backlinks" }
@@ -60,6 +61,8 @@ export interface Responses {
     marginCollapsed: boolean;
     marginWidth: number | null;
     carrier: boolean;
+    /** Thunderbird supplied no Message-ID; annotation is disabled rather than using an unsafe key. */
+    unsupported?: "missingMessageId";
     /** Ids of the cards shown folded (D30). */
     folded: string[];
     /** The email's Message-ID (key of its drafts, D34). */

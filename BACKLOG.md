@@ -53,7 +53,7 @@ To be converted into GitHub issues and milestones.
 - [x] Carrier folder deleted: recreate, re-upload from the local store, D20 notice
 - [x] Carrier folder renamed or moved, single carriers deleted by hand (D20)
 - [x] Edits of the same note on two devices combined line by line; clashes as a conflict box with Keep this / Keep both (D32)
-- [ ] Test sync with two real Thunderbird installations on the same account
+- [x] (2026-10-18, #24) Test sync with two real Thunderbird installations on the same account (153 ESR, two Macs)
 - [x] Restore deleted notes and highlights from the last 30 days, per email, from the toolbar list (D33)
 - [x] Draft autosave while a note is being edited; restore or discard after a crash (D34)
 - [x] Visible warning when sync isn't working: icon, tooltip, toolbar list (D35)
@@ -87,15 +87,20 @@ To be converted into GitHub issues and milestones.
 - [x] (0.41.1) Sync: quarantine unreadable/unsupported carriers; never delete them in cleanup; remove old revisions only once the replacement is uploaded and recorded (confirmed loss path: `mergeRemote` marks a failed read as merged, `push` then deletes it). Tests: malformed attachment, newer format version, crash between upload and cleanup.
 - [x] (0.41.2) Merge: equal times without a known base give a conflict box in sync mode (was "incoming wins", the import rule).
 - [x] (0.46.4) Dev issues #1, #3, #4: a carrier not read for a connection problem isn't removed by cleanup; a label colour chosen in an email stays in its account; an import naming an account not in Thunderbird waits for it instead of going to another account.
-- [ ] Rendering: blank-line padding (a no-break-space paragraph) ends a list, so a list item's continuation paragraph indented 4+ is drawn as code while labels and dates treat it as text (older than format 2; PR #6 discussion). Pad without ending lists, then take "what is code" from the one parse of the padded text.
-- [ ] Performance: `tasksIn` parses a note 4 times (about 175 ms for 500 notes of 60 lines); 2 should do (PR #6 discussion).
-- [ ] Merge spec: a short normative merge spec; scenarios for 3 devices, reordered/replayed carriers, intentional reverts, missing bases.
+- [x] (#15) Rendering: keep no-break-space blank-line padding inside active quote/list containers; verify continuation text and code mapping for lists, quotes and nesting (PR #6 discussion).
+- [x] (#16) Performance: `tasksIn/taskAt`: 2 parses per note (one shared prepared parse for code and checklist lines), pinned by a parser-count test.
+- [x] (0.48.0, D45) Merge spec: `docs/SYNC.md`, with scenarios as tests (3 devices, reordered carriers, reverts, missing base, equal times, editing while sync runs, equal-time colours). Fixed on the way: several bases per carrier, merging oldest first, combining a save with what arrived during editing, a deterministic colour tie-break.
+- [x] (0.48.1, #14) Sync backstop: persist the exact local state and readable carrier known to represent it; a check uploads if either changes, including when another device replaces the carrier with the same `rev`.
 - [x] (0.41.3) Deletions: compact deletion records (id + time, no text) kept for a year beyond the 30-day restore window, so a stale device can't resurrect deleted notes (limit: away over a year).
-- [x] (0.42.0, D42) Identity/routing: notes per account (Message-ID + account), moves take notes along, removed accounts shown, label settings per account. Still open: an exact fingerprint recipe for emails without Message-ID.
-- [ ] Docs: remove the old time-reference sketch (`@due`, times), `[[` listed as open, done grouping; storage authority without the helper (IndexedDB is the local truth, Markdown the interchange format).
-- [ ] Anchoring: a confidence policy for ambiguous matches (repeated quotes, signatures) and what the user sees; reconsider "reattach to selection".
-- [ ] Tested-versions matrix (Thunderbird, OS, server); 153 ESR check; degraded behaviour when an Experiment function fails.
-- [ ] D15: state "no classic Outlook" as a scope choice (Office.js add-ins do run on classic Outlook).
+- [x] (0.42.0, D42) Identity/routing: notes per account (Message-ID + account), moves take notes along, removed accounts shown, label settings per account. Messages with an empty Message-ID aren't annotated; a fallback isn't planned (#26, accepted with its rare corner cases).
+- [x] (2026-10-18) Docs: old time-reference sketch replaced by "Dates, not times"; `[[` picker shown as built; done grouping as built; "Where the notes live" (authoritative state, copies, undo without Git); compatibility rules and format-2 reference files (`packages/core/test/format-fixtures/`); D5, D6, D10 point to what refines them.
+- [x] (#9, D9) Encrypted email disclosure: note text, quotes and context remain plain in the profile, exports and IMAP carriers; documented limitation, with no unreliable per-message warning or selector-less storage mode.
+- [x] (#13) Draft 2020-12 schemas in `docs/schemas/` (front matter, settings.json, settings carrier), tested against reference files and generated output; documented version/conversion rules for future changes. Migration implementation and corner cases remain out of scope.
+- [x] (0.48.6, #10) Anchoring: clearly better context or fuzzy score decides; overlapping fuzzy alignments count as one place; among equally good places the one clearly nearest the old position wins (next at least twice as far); about equally near or no position: unplaced, with the existing warning.
+- [x] (#11) Tested-version register in `docs/RELEASE.md` (#25); minimum stays 153 ESR.
+- [x] (2026-10-18, #24) 153 ESR tested by the owner on two physical computers (macOS), syncing on the same IMAP accounts: works; recorded in the register. Windows and Linux not yet tested.
+- [x] (#12) Degraded behaviour when an Experiment function fails (search exclusion above all).
+- [x] (2026-10-18) D15: classic Outlook left out as a scope choice; add-in support on non-Microsoft accounts checked against Microsoft's overview.
 
 ## Later — Outlook (D15)
 - [ ] Office.js task-pane add-in for Microsoft 365/Exchange mailboxes

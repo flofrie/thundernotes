@@ -1,0 +1,39 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# The whole suite on every pull request and every push to main (AGENTS.md, section 4):
+# all tests (core and Thunderbird), typecheck and build, on the oldest Node the build
+# instructions name (docs/RELEASE.md) and the one used for development.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "26"]
+    steps:
+      # Actions pinned to a release's commit (at least two weeks old), as dependencies are.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+      # The release package is reproducible (packages/thunderbird/package.mjs): this checksum must
+      # equal the one of the .xpi built on the owner's machine and in docs/BUILDING.md's README.
+      - run: npm run package
+      - run: sha256sum build/*.xpi

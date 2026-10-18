@@ -12,6 +12,12 @@ import type { TextPositionSelector, TextQuoteSelector } from "../index.js";
 
 /** Characters of prefix and suffix stored with a quote. */
 export const CONTEXT_LENGTH = 32;
+const REPEATED_CONTEXT_MIN = 8;
+const REPEATED_CONTEXT_MARGIN = 4;
+const FUZZY_SCORE_MIN = 60;
+const FUZZY_SCORE_MARGIN = 6;
+/** Among equally good candidates, the nearest to the old position wins only if the next is this many times as far. */
+const NEAREST_FACTOR = 2;
 
 export type AnchorMethod = "position" | "quote" | "context" | "loose" | "fuzzy" | "partial";
 
@@ -49,6 +55,8 @@ export function anchor(text: string, quote: TextQuoteSelector, position?: TextPo
   const prefix = quote.prefix ?? "";
   const suffix = quote.suffix ?? "";
   const near = position?.start ?? 0;
+  // For deciding between equally good candidates: only a position actually stored counts.
+  const known = position ? position.start : undefined;
   if (!exact) return { status: "orphan" };
 
   if (position && text.slice(position.start, position.end) === exact) {
@@ -60,14 +68,15 @@ export function anchor(text: string, quote: TextQuoteSelector, position?: TextPo
     return { status: "anchored", method: "quote", start: hits[0]!, end: hits[0]! + exact.length };
   }
   if (hits.length > 1) {
-    const h = bestByContext(text, hits, exact.length, prefix, suffix, near);
+    const h = bestByContext(text, hits, exact.length, prefix, suffix, known);
+    if (h === null) return { status: "orphan" };
     return { status: "anchored", method: "context", candidates: hits.length, start: h, end: h + exact.length };
   }
 
-  const loose = looseMatch(text, exact, prefix, suffix, near);
+  const loose = looseMatch(text, exact, prefix, suffix, known);
   if (loose) return loose;
 
-  const fuzzy = fuzzyMatch(text, exact, prefix, suffix, near);
+  const fuzzy = fuzzyMatch(text, exact, prefix, suffix, near, known);
   if (fuzzy) return fuzzy;
 
   const partial = partialMatch(text, exact, near);
@@ -104,15 +113,30 @@ function contextScore(text: string, start: number, end: number, prefix: string, 
   );
 }
 
-/** Best hit by context; distance to the old position breaks ties. */
-function bestByContext(text: string, hits: number[], length: number, prefix: string, suffix: string, near: number): number {
-  let best = hits[0]!;
-  let bestScore = -Infinity;
-  for (const h of hits) {
-    const score = contextScore(text, h, h + length, prefix, suffix) - Math.abs(h - near) / 1e7;
-    if (score > bestScore) [best, bestScore] = [h, score];
-  }
-  return best;
+/**
+ * Several equally good candidates (#10): the one nearest the old position, if it is clearly the
+ * nearest (the next at least NEAREST_FACTOR times as far). A view change shifts text only a
+ * little, so that is usually the passage the note was made on; two about equally near, or no
+ * stored position, stay undecided (null).
+ */
+function nearest<T>(candidates: T[], start: (c: T) => number, near: number | undefined): T | null {
+  if (near === undefined || !candidates.length) return null;
+  const [first, second] = [...candidates].sort((a, b) => Math.abs(start(a) - near) - Math.abs(start(b) - near));
+  if (!second) return first!;
+  return Math.abs(start(first!) - near) * NEAREST_FACTOR < Math.abs(start(second) - near) ? first! : null;
+}
+
+/**
+ * Repeated text: substantial, clearly better context decides; among candidates whose context is
+ * about as good, the clearly nearest to the old position (`nearest`); otherwise none.
+ */
+function bestByContext(text: string, hits: number[], length: number, prefix: string, suffix: string, near: number | undefined): number | null {
+  const scored = hits.map((start) => ({ start, score: contextScore(text, start, start + length, prefix, suffix) }));
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0]!;
+  const contenders = scored.filter((s) => best.score - s.score < REPEATED_CONTEXT_MARGIN);
+  if (contenders.length === 1 && best.score >= REPEATED_CONTEXT_MIN) return best.start;
+  return nearest(contenders, (c) => c.start, near)?.start ?? null;
 }
 
 /** Letters and digits only, lower case, with a map back to text offsets. */
@@ -130,14 +154,15 @@ function loosen(text: string): { s: string; map: number[] } {
 }
 
 /** Exact match ignoring punctuation, spacing and case (`*bold*`, `/em/`, bullets). */
-function looseMatch(text: string, exact: string, prefix: string, suffix: string, near: number): AnchorResult | null {
+function looseMatch(text: string, exact: string, prefix: string, suffix: string, near: number | undefined): AnchorResult | null {
   const pattern = loosen(exact).s;
   if (pattern.length < 3) return null;
   const loose = loosen(text);
   const hits = indexesOf(loose.s, pattern);
   if (!hits.length) return null;
-  const nearLoose = Math.max(0, loose.map.findIndex((i) => i >= near));
-  const h = bestByContext(loose.s, hits, pattern.length, loosen(prefix).s, loosen(suffix).s, nearLoose);
+  const nearLoose = near === undefined ? undefined : Math.max(0, loose.map.findIndex((i) => i >= near));
+  const h = hits.length === 1 ? hits[0]! : bestByContext(loose.s, hits, pattern.length, loosen(prefix).s, loosen(suffix).s, nearLoose);
+  if (h === null) return null;
   return {
     status: "anchored",
     method: "loose",
@@ -148,23 +173,45 @@ function looseMatch(text: string, exact: string, prefix: string, suffix: string,
 }
 
 /** Approximate match allowing edits in up to a quarter of the quote. */
-function fuzzyMatch(text: string, exact: string, prefix: string, suffix: string, near: number): AnchorResult | null {
+function fuzzyMatch(text: string, exact: string, prefix: string, suffix: string, near: number, known: number | undefined): AnchorResult | null {
   if (exact.length < 8) return null;
   const maxErrors = Math.min(256, Math.floor(exact.length / 4));
   const matches = search(text, exact, maxErrors);
   if (!matches.length) return null;
   // Same weighting idea as Hypothesis: the quote counts most, then context, then position.
-  let best = matches[0]!;
-  let bestScore = -Infinity;
-  for (const m of matches) {
-    const score =
+  const scored = matches.map((m) => ({ match: m, score:
       50 * (1 - m.errors / exact.length) +
       20 * (prefix ? commonSuffix(text.slice(Math.max(0, m.start - prefix.length), m.start), prefix) / prefix.length : 0) +
       20 * (suffix ? commonPrefix(text.slice(m.end, m.end + suffix.length), suffix) / suffix.length : 0) +
-      2 * (1 - Math.min(1, Math.abs(m.start - near) / Math.max(1, text.length)));
-    if (score > bestScore) [best, bestScore] = [m, score];
+      2 * (1 - Math.min(1, Math.abs(m.start - near) / Math.max(1, text.length))) }));
+  // The matcher can return several equally good alignments that overlap the
+  // same passage. Treat those as one location before applying the ambiguity
+  // margin, or harmless alignment variants can orphan an unambiguous quote.
+  const byLocation = [...scored].sort((a, b) => a.match.start - b.match.start || a.match.end - b.match.end);
+  const locations: typeof scored[] = [];
+  let locationEnd = -1;
+  for (const candidate of byLocation) {
+    const lastLocation = locations[locations.length - 1];
+    if (lastLocation && candidate.match.start < locationEnd) {
+      lastLocation.push(candidate);
+      locationEnd = Math.max(locationEnd, candidate.match.end);
+    } else {
+      locations.push([candidate]);
+      locationEnd = candidate.match.end;
+    }
   }
-  return { status: "anchored", method: "fuzzy", start: best.start, end: best.end, errors: best.errors, candidates: matches.length };
+  const representatives = locations.map((location) => location.reduce((best, candidate) => candidate.score > best.score ? candidate : best));
+  representatives.sort((a, b) => b.score - a.score);
+  // Several places: a clearly better score decides; among about equally good ones, the
+  // clearly nearest to the old position (`nearest`, #10).
+  const top = representatives[0]!;
+  const contenders = representatives.filter((r) => top.score - r.score < FUZZY_SCORE_MARGIN);
+  const chosen = representatives.length === 1 || (contenders.length === 1 && top.score >= FUZZY_SCORE_MIN) ? top : nearest(contenders, (c) => c.match.start, known);
+  // Still undecided: don't let the broader partial search turn the same ambiguous text into
+  // a plausible-looking highlight.
+  if (!chosen) return { status: "orphan" };
+  const best = chosen.match;
+  return { status: "anchored", method: "fuzzy", start: best.start, end: best.end, errors: best.errors, candidates: locations.length };
 }
 
 /** Partial anchoring needs at least this many characters and this share of the quote. */

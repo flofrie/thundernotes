@@ -6,6 +6,8 @@
 // display script asks it for the displayed email's annotations and sends changes.
 
 import {
+  mergeText,
+  type TextSide,
   COLOURS,
   COLOUR_NAMES,
   deleteAnnotation,
@@ -421,11 +423,23 @@ async function lookupEmail(messageId: string): Promise<EmailInfo | null> {
   return { subject: header.subject ?? "", name: senderName(header.author) || header.author || "", address: addressOf(header.author), date: header.date ? new Date(header.date).toISOString() : undefined };
 }
 
+/**
+ * A note's text as saved: what was written, unless the stored text changed since the edit began
+ * (`base`; an edit from another device arrived while this one was being edited). Then both are
+ * combined line by line against `base`, as sync combines them (D32): nothing is overwritten, a
+ * line changed differently on both becomes a conflict box (docs/SYNC.md).
+ */
+function combined(base: string | undefined, written: TextSide, stored: TextSide): string {
+  if (base === undefined || stored.text === base || stored.text === written.text) return written.text;
+  return mergeText(base, written, stored).text;
+}
+
 const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
   async load(_request, d) {
     const prefs = await messenger.storage.local.get(["marginCollapsed", "marginWidth"]);
     const marginCollapsed = prefs.marginCollapsed === true;
     const marginWidth = typeof prefs.marginWidth === "number" ? prefs.marginWidth : null;
+    if (!d.email.messageId.trim()) return { set: null, debug: false, marginCollapsed, marginWidth, carrier: false, folded: [], ref: "", unsupported: "missingMessageId" };
     if (d.carrier) return { set: null, debug: false, marginCollapsed: true, marginWidth, carrier: true, folded: [], ref: d.email.messageId, accountId: d.email.accountId };
     const set = await storedSet(d);
     // A tag without notes is stale (e.g. the add-on was removed and its database deleted).
@@ -458,12 +472,14 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
     return next;
   },
 
-  async update({ id, bodyMd }, d) {
+  async update({ id, bodyMd, base }, d) {
     const set = await storedSet(d);
     const now = new Date().toISOString();
-    if (!set?.annotations.some((a) => a.id === id)) throw new Error("Highlight not found");
+    const stored = set?.annotations.find((a) => a.id === id);
+    if (!set || !stored) throw new Error("Highlight not found");
     const by = await deviceName();
-    const annotations = set.annotations.map((a) => (a.id === id ? { ...a, bodyMd, updated: now, textUpdated: now, textBy: by } : a));
+    const text = combined(base, { text: bodyMd, at: now, by }, { text: stored.bodyMd, at: stored.textUpdated ?? stored.updated, by: stored.textBy });
+    const annotations = set.annotations.map((a) => (a.id === id ? { ...a, bodyMd: text, updated: now, textUpdated: now, textBy: by } : a));
     const updated = touch({ ...set, annotations }, now);
     await save(updated);
     return updated;
@@ -521,12 +537,14 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
     return next;
   },
 
-  async setEmailNote({ md }, d) {
+  async setEmailNote({ md: written, base }, d) {
     const now = new Date().toISOString();
     const set = (await storedSet(d)) ?? newSet(d.email, now);
+    const by = await deviceName();
+    const md = combined(base, { text: written.trim(), at: now, by }, { text: set.emailNoteMd ?? "", at: set.emailNoteUpdated ?? set.updated, by: set.emailNoteBy });
     // Emptied: deleted, with a copy kept for restoring (D33).
     const next: AnnotationSet = md.trim()
-      ? { ...touch({ ...set }, now), emailNoteUpdated: now, emailNoteBy: await deviceName(), emailNoteMd: md.trim() }
+      ? { ...touch({ ...set }, now), emailNoteUpdated: now, emailNoteBy: by, emailNoteMd: md.trim() }
       : deleteEmailNote(set, now);
     if (!hasContent(next)) return saveEmptied(next, d);
     await save(next);
@@ -984,6 +1002,9 @@ messenger.runtime.onMessage.addListener((
     if (claimed && (claimed !== shown.email.messageId || (claimedAccount !== undefined && claimedAccount !== shown.email.accountId))) {
       if (request.type === "status") return undefined;
       d = await displayedAs(shown, claimed, claimedAccount);
+    }
+    if (!d.email.messageId.trim() && ["add", "remove", "update", "setEmailNote", "setColour", "setFolded", "restoreDeleted", "purgeDeleted"].includes(request.type)) {
+      throw new Error("ThunderNotes can't safely annotate a message without a Message-ID");
     }
     // Carriers are never annotated (D27).
     if (d.carrier && ["add", "remove", "update", "setEmailNote", "setColour", "setFolded", "restoreDeleted", "purgeDeleted"].includes(request.type)) {

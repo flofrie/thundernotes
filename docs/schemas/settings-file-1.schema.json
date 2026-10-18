@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/flofrie/thundernotes/main/docs/schemas/settings-file-1.schema.json",
+  "title": "ThunderNotes export settings.json, version 1",
+  "type": "object",
+  "required": ["thundernotes", "version", "exported", "options", "labels"],
+  "properties": {
+    "thundernotes": { "const": "settings" },
+    "version": { "const": 1 },
+    "exported": { "$ref": "settings-carrier-1.schema.json#/$defs/timestamp" },
+    "options": {
+      "type": "object",
+      "description": "Options-page storage keys: switches and string choices such as the last highlight colour.",
+      "additionalProperties": { "anyOf": [{ "type": "boolean" }, { "type": "string" }] }
+    },
+    "labels": { "$ref": "settings-carrier-1.schema.json" },
+    "labelsByAccount": {
+      "type": "object",
+      "description": "Account address to settings (D42); labels is retained for older exports.",
+      "additionalProperties": { "$ref": "settings-carrier-1.schema.json" }
+    },
+    "taskView": {
+      "description": "Opaque task-view preferences, restored as stored. This field has no independent interoperability contract."
+    },
+    "collapsed": { "type": "object", "additionalProperties": { "type": "boolean" } }
+  },
+  "additionalProperties": true
+}
