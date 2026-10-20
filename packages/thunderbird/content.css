@@ -63,6 +63,20 @@ mark.thundernotes-hl-note.thundernotes-hl-start.thundernotes-hl-end {
   box-shadow: inset 0 0 0 1.5px var(--tn-c-frame, #a07c00);
 }
 
+/* A highlighted picture (D46): a ring in its colour, outside the picture (an outline takes no
+ * space, so the layout stays); with a note also a thin dark frame at its edge. */
+img.thundernotes-hl-img {
+  outline: 4px solid var(--tn-c-bg, rgba(255, 240, 74, 0.6));
+  outline-offset: 2px;
+  cursor: pointer;
+}
+img.thundernotes-hl-img.thundernotes-hl-note {
+  box-shadow: 0 0 0 1.5px var(--tn-c-frame, #a07c00);
+}
+img.thundernotes-hl-img.thundernotes-hl-active {
+  outline-color: var(--tn-c-active, rgba(255, 240, 74, 0.9));
+}
+
 /* The highlight whose card is hovered or active. */
 mark.thundernotes-hl-active {
   background: var(--tn-c-active, rgba(255, 240, 74, 0.9));
@@ -89,4 +103,5 @@ mark.thundernotes-hl-active {
     background: none !important; color: inherit !important; padding: 0 !important; margin: 0 !important;
     border: none !important; box-shadow: none !important; outline: none !important;
   }
+  html:not(.thundernotes-print-notes) img.thundernotes-hl-img { box-shadow: none !important; outline: none !important; }
 }

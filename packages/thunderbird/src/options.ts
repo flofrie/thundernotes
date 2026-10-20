@@ -5,7 +5,7 @@
 // Options page: settings in cards by area (switches, live examples for highlights and dates), the
 // sync state per account, export all notes as a zip of Markdown files (D25), import zips or .md files.
 
-import { COLOURS, COLOUR_NAMES, fileName, formatDue, fromMarkdown, hasContent, isoDate, mergeSets, mergeSettings, rgba, setAlwaysShowYear, textOn, toMarkdown, type AnnotationSet, type Settings } from "@thundernotes/core";
+import { COLOURS, COLOUR_NAMES, fileName, formatDue, fromMarkdown, hasContent, isoDate, mergeSets, quoteLabel, mergeSettings, rgba, setAlwaysShowYear, textOn, toMarkdown, type AnnotationSet, type Settings } from "@thundernotes/core";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { exportDue, formatDate, recordExport } from "./backup.js";
 import { getAllSets, getSet, putSet } from "./store.js";
@@ -14,6 +14,11 @@ import { tagCopies as tagAllCopies } from "./tags.js";
 import { accountByAddress, addressesById } from "./accounts.js";
 import { IGNORED_KEY, ignoredKey, isMissing, type Ignored } from "./deleted.js";
 import { SETTINGS_FILE, buildSettingsFile, parseSettingsFile, type SettingsFile } from "./settings-file.js";
+import { mountNote3d } from "./note3d.js";
+import { installCopyMenu } from "./copy-menu.js";
+
+// Right-click: no browser menu; "Copy" while text is selected (D47).
+installCopyMenu(document, (text) => navigator.clipboard.writeText(text));
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -245,12 +250,18 @@ async function showLastExport(): Promise<void> {
 }
 showLastExport();
 
+// The header's post-it in 3D (a small extra; the flat icon stays without WebGL).
+const headerIcon = document.querySelector<HTMLElement>("h1 img");
+if (headerIcon) mountNote3d(headerIcon);
+
 // Settings: checkbox id = storage key; `on` = the default when never set.
 const SETTINGS: { key: string; on: boolean }[] = [
   { key: "developerFunctions", on: false },
   { key: "showEditHints", on: true },
   { key: "useLastColour", on: true },
   { key: "contrastText", on: true },
+  { key: "useEmptySpace", on: true },
+  { key: "cardPreview", on: true },
   { key: "checkboxCycleToText", on: false },
   { key: "renumberLists", on: true },
   { key: "cmdKLinkPicker", on: true },
@@ -429,8 +440,7 @@ async function showMissing(): Promise<void> {
       const parts = [
         ...(set.emailNoteMd ? [`On the whole email:\n${set.emailNoteMd}`] : []),
         ...set.annotations.map((a) => {
-          const quote = a.selectors.find((s) => s.type === "TextQuoteSelector") as { exact?: string } | undefined;
-          return `On “${quote?.exact ?? ""}”:\n${a.bodyMd || "(highlight only)"}`;
+          return `On “${quoteLabel(a) ?? ""}”:\n${a.bodyMd || "(highlight only)"}`;
         }),
       ];
       box.textContent = parts.join("\n\n");
@@ -475,11 +485,10 @@ void messenger.runtime
     if (now !== before) await showMissing();
   });
 
-// Opened in a tab of its own (from the task view, D44): it answers, so it is brought to the front
-// instead of opened again. Not inside the Add-ons Manager (it couldn't jump there).
-const ownTab = new URLSearchParams(location.search).has("tab");
+// Always in a tab of its own (D47): it answers, so the task view's links bring it to the front
+// instead of opening another.
 messenger.runtime.onMessage.addListener((message: { type?: string }) => {
-  if (message?.type !== "optionsTab" || !ownTab) return undefined;
+  if (message?.type !== "optionsTab") return undefined;
   return messenger.tabs.getCurrent().then((tab) => (tab?.id !== undefined ? { tabId: tab.id, windowId: tab.windowId } : undefined));
 });
 

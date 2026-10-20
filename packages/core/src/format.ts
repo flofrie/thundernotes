@@ -5,7 +5,7 @@
 /**
  * The ThunderNotes file format (D5, D25): one Markdown file per email.
  * - YAML front matter: the email reference and, per annotation, its id, quote,
- *   prefix/suffix, position and timestamps. Authoritative for anchoring.
+ *   prefix/suffix, position (or, on a picture, `image`, D46) and timestamps. Authoritative for anchoring.
  * - Body: `# Subject`, then the note on the whole email, then one `## “quote”`
  *   section per annotation that has a note, marked `<!-- tn:<id> -->`. Authoritative
  *   for note text. Headings without the marker belong to the note above them.
@@ -14,6 +14,7 @@
 
 import { Document, isPair, isScalar, isSeq, parse, visit } from "yaml";
 import { EMAIL_NOTE_KEY, mergeText } from "./conflict.js";
+import { imageSelectorOf, quoteLabel } from "./anchoring/image.js";
 import type { Annotation, AnnotationSet, EmailRef, FoldState, TextPositionSelector, TextQuoteSelector, Tombstone } from "./index.js";
 
 export const FORMAT_VERSION = 2;
@@ -24,6 +25,8 @@ interface FrontAnnotation {
   prefix?: string;
   suffix?: string;
   position?: [number, number];
+  /** A note on a picture (D46); `quote` is then empty, so older readers place it nowhere. */
+  image?: { src: string; index: number; alt?: string; prefix?: string; suffix?: string };
   colour?: string;
   tags?: string[];
   created: string;
@@ -81,9 +84,19 @@ function headingQuote(quote: string): string {
 function toFront(a: Annotation): FrontAnnotation {
   const quote = quoteOf(a);
   const position = positionOf(a);
+  const image = imageSelectorOf(a);
   return {
     id: a.id,
     quote: quote?.exact ?? "",
+    ...(image && {
+      image: {
+        src: image.src,
+        index: image.index,
+        ...(image.alt && { alt: image.alt }),
+        ...(image.prefix && { prefix: image.prefix }),
+        ...(image.suffix && { suffix: image.suffix }),
+      },
+    }),
     ...(quote?.prefix && { prefix: quote.prefix }),
     ...(quote?.suffix && { suffix: quote.suffix }),
     ...(position && { position: [position.start, position.end] as [number, number] }),
@@ -104,7 +117,20 @@ const time = (v: unknown, fallback: string) => (v instanceof Date ? v.toISOStrin
 
 /** Front-matter fields + note text -> Annotation. */
 function fromFront(fa: FrontAnnotation, bodyMd: string, created: string): Annotation {
-  const selectors: Annotation["selectors"] = [
+  const image = fa.image && typeof fa.image === "object" && fa.image.src !== undefined ? fa.image : undefined;
+  const index = Number(image?.index);
+  const selectors: Annotation["selectors"] = image
+    ? [
+        {
+          type: "ImageSelector",
+          src: String(image.src),
+          index: Number.isSafeInteger(index) && index >= 0 ? index : 0,
+          ...(image.alt && { alt: String(image.alt) }),
+          ...(image.prefix && { prefix: String(image.prefix) }),
+          ...(image.suffix && { suffix: String(image.suffix) }),
+        },
+      ]
+    : [
     {
       type: "TextQuoteSelector",
       exact: String(fa.quote),
@@ -112,7 +138,7 @@ function fromFront(fa: FrontAnnotation, bodyMd: string, created: string): Annota
       ...(fa.suffix !== undefined && { suffix: String(fa.suffix) }),
     },
   ];
-  if (Array.isArray(fa.position) && fa.position.length === 2) {
+  if (!image && Array.isArray(fa.position) && fa.position.length === 2) {
     selectors.push({ type: "TextPositionSelector", start: Number(fa.position[0]), end: Number(fa.position[1]) });
   }
   const annotation: Annotation = {
@@ -269,7 +295,7 @@ export function toMarkdown(set: AnnotationSet): string {
   if (set.emailNoteMd?.trim()) parts.push(noteText(set.emailNoteMd));
   for (const a of set.annotations) {
     if (!a.bodyMd.trim()) continue;
-    parts.push(boundaryLine(boundary), `## “${headingQuote(quoteOf(a)?.exact ?? "")}” <!-- tn:${a.id} -->\n\n${noteText(a.bodyMd)}`);
+    parts.push(boundaryLine(boundary), `## “${headingQuote(quoteLabel(a) ?? "")}” <!-- tn:${a.id} -->\n\n${noteText(a.bodyMd)}`);
   }
   parts.push(boundaryLine(boundary));
   return `${parts.join("\n\n")}\n`;

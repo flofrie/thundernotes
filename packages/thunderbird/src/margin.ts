@@ -4,10 +4,12 @@
 
 // Word-style margin: a column on the right of the message pane, outside the email
 // text, with one card per note at the height of its highlight. The email's width
-// shrinks to make room while the margin is open.
+// shrinks to make room while the margin is open: only as far as needed when there is empty
+// space beside the email's content (a centred newsletter column, 0.76.1).
 
 import type { Annotation, AnnotationSet } from "@thundernotes/core";
 import { NoteCard, type CardActions, type CardEvents, type Draft } from "./card.js";
+import { contentRight } from "./content-extent.js";
 
 export const MARGIN_CSS = `
   .resize { position: absolute; top: 0; bottom: 0; left: -5px; width: 9px; cursor: ew-resize; z-index: 2; }
@@ -45,6 +47,10 @@ const SHARE = 0.3;
 /** Limits when the user drags the width (left edge of a card). */
 const DRAG_MIN = 180;
 const DRAG_MAX_SHARE = 0.6;
+/** Space kept between the email's content and the notes when they use the empty space beside it. */
+const CONTENT_GAP = 16;
+/** Narrowing saved below this: not worth a different layout. */
+const SAVING_MIN = 24;
 
 /** Where a card ended up, in document coordinates. */
 export interface CardBox {
@@ -75,7 +81,12 @@ export interface MarginHost {
    * from cards to their highlights, D23).
    */
   laidOut?(cards: CardBox[], active: string | null): void;
+  /** Setting "Use empty space beside the email content for notes" (on unless switched off). */
+  useEmptySpace?(): boolean;
 }
+
+/** Root element properties set while the notes column is shown (see layoutNow). */
+const ROOT_PROPERTIES = ["padding-right", "box-sizing", "width", "min-width"];
 
 export class Margin {
   private column: HTMLElement;
@@ -108,9 +119,24 @@ export class Margin {
     root.append(this.column, this.toggle);
 
     const relayout = () => this.schedule();
-    window.addEventListener("resize", relayout);
+    // Where the content ends is measured again only when it may have changed: the pane's size,
+    // a picture or font loaded. Not on every layout, and not for the email's own reflow when
+    // narrowed, so it doesn't go back and forth.
+    const remeasure = () => {
+      this.fitDirty = true;
+      this.schedule();
+    };
+    window.addEventListener("resize", remeasure);
+    document.addEventListener("load", (e) => e.target instanceof Element && remeasure(), true);
+    document.fonts?.addEventListener?.("loadingdone", remeasure);
     // Images loading, fonts, view changes: the email reflows, highlights move.
     new ResizeObserver(relayout).observe(document.body);
+  }
+
+  /** The setting changed: measure and lay out again. */
+  refit(): void {
+    this.fitDirty = true;
+    this.layoutNow();
   }
 
   /**
@@ -317,6 +343,55 @@ export class Margin {
     this.layoutNow();
   }
 
+  /** The email's own inline values of the root properties the margin overrides (restored when hidden). */
+  private rootStyle: (readonly [string, string, string])[] | null = null;
+  /** How far the email is narrowed when it has empty space beside its content (see fit). */
+  private fitReserve = 0;
+  private fitKey = "";
+  private fitDirty = true;
+
+  /**
+   * Narrows the email by `reserve` pixels (padding on the root element; !important beats the
+   * email's own CSS). Some emails give the root element a width of their own
+   * (`<html style="width:100%">`): that width plus the padding is wider than the pane, so the
+   * email kept its full width and the notes ended up after it, out of view. Counting the padding
+   * into the width, and dropping the email's own width and min-width on the root, keeps the email
+   * in its column. The email's own values come back when it isn't narrowed.
+   */
+  private applyReserve(reserve: number): void {
+    if (reserve === this.reserved) return;
+    this.reserved = reserve;
+    const root = document.documentElement.style;
+    if (reserve) {
+      this.rootStyle ??= ROOT_PROPERTIES.map((p) => [p, root.getPropertyValue(p), root.getPropertyPriority(p)] as const);
+      root.setProperty("padding-right", `${reserve}px`, "important");
+      root.setProperty("box-sizing", "border-box", "important");
+      root.setProperty("width", "auto", "important");
+      root.setProperty("min-width", "0", "important");
+    } else if (this.rootStyle) {
+      for (const [p, value, priority] of this.rootStyle) {
+        if (value) root.setProperty(p, value, priority);
+        else root.removeProperty(p);
+      }
+      this.rootStyle = null;
+    }
+  }
+
+  /**
+   * The least narrowing that keeps the email's content left of the notes, with CONTENT_GAP to
+   * spare: none if the space beside the content is wide enough; else narrowed step by step, each
+   * step sized by how far the content moved in the last (a centred column moves half as far as
+   * the email narrows). `full` if that doesn't suffice: an email whose text fills the width is
+   * narrowed as without this.
+   */
+  private fit(width: number, full: number): number {
+    const limit = document.documentElement.clientWidth - width - SIDE_PADDING - CONTENT_GAP;
+    return fitReserve(full, limit, (reserve) => {
+      this.applyReserve(reserve);
+      return contentRight(document.body);
+    });
+  }
+
   private schedule(): void {
     // A zero-delay timer, not requestAnimationFrame: in the message pane rAF callbacks
     // can wait until something else repaints (cards stayed put after a delete).
@@ -342,21 +417,31 @@ export class Margin {
         ? this.clampDrag(this.customWidth)
         : Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, viewport * SHARE)));
     this.width = width;
-    const reserve = open ? width + 2 * SIDE_PADDING : 0;
-    if (reserve !== this.reserved) {
-      this.reserved = reserve;
-      // Shrink the email by padding the root element; !important beats the email's own CSS.
-      if (reserve) document.documentElement.style.setProperty("padding-right", `${reserve}px`, "important");
-      else document.documentElement.style.removeProperty("padding-right");
+    const full = width + 2 * SIDE_PADDING;
+    // Empty space beside the content (not when printing: paper has its own width).
+    const useSpace = open && !this.printShown && (this.host.useEmptySpace?.() ?? true);
+    if (useSpace) {
+      const key = `${viewport}|${width}`;
+      if (this.fitDirty || key !== this.fitKey) {
+        this.fitReserve = this.fit(width, full);
+        this.fitKey = key;
+        this.fitDirty = false;
+      }
+    } else {
+      this.fitKey = "";
     }
+    const reserve = !open ? 0 : useSpace ? this.fitReserve : full;
+    this.applyReserve(reserve);
     if (!open) {
       this.host.laidOut?.([], null);
       return;
     }
 
-    // Fixed-width emails can be wider than the space left: put the margin after their content.
-    const contentRight = document.body.getBoundingClientRect().left + window.scrollX + document.body.scrollWidth;
-    const left = Math.max(document.documentElement.clientWidth - width - SIDE_PADDING, contentRight + SIDE_PADDING);
+    // In the empty space beside the content, measured to fit (above). Else in the space made:
+    // fixed-width emails can be wider than that, then after their content.
+    const emailRight = document.body.getBoundingClientRect().left + window.scrollX + document.body.scrollWidth;
+    const atEdge = document.documentElement.clientWidth - width - SIDE_PADDING;
+    const left = reserve < full ? atEdge : Math.max(atEdge, emailRight + SIDE_PADDING);
     this.column.style.left = `${left}px`;
     this.column.style.width = `${width}px`;
 
@@ -391,6 +476,26 @@ export class Margin {
       this.host.laidOut(cards, this.active);
     }
   }
+}
+
+/**
+ * The least narrowing (0…`full`) after which the content's right edge, as `measure` reports it
+ * with that narrowing applied, is at most `limit`; `full` if none is, or if it would save less
+ * than SAVING_MIN (see Margin.fit).
+ */
+export function fitReserve(full: number, limit: number, measure: (reserve: number) => number): number {
+  let reserve = 0;
+  let ratio = 1;
+  let right = measure(0);
+  for (let i = 0; i < 6 && right > limit && reserve < full; i++) {
+    const next = ratio < 0.05 ? full : Math.min(full, Math.ceil(reserve + (right - limit) / ratio));
+    const now = measure(next);
+    ratio = (right - now) / (next - reserve);
+    reserve = next;
+    right = now;
+  }
+  // Hardly any space saved: narrowed as usual, so ordinary emails look exactly as before.
+  return right > limit || full - reserve < SAVING_MIN ? full : reserve;
 }
 
 /** A card's wish for the stack: its highlight's top (-Infinity: pinned first; MAX: no highlight, last). */

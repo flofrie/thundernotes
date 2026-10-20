@@ -3,14 +3,20 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 // Message display script: draws highlights in the displayed email, creates new ones
-// from the selection (floating button, Ctrl/Cmd+Shift+H or +N, context menu) and
+// from the selection (floating button, Ctrl/Cmd+Shift+H or +N, context menu) or on a picture
+// (context menu, D46) and
 // shows note cards in a Word-style margin on the right (margin.ts). A highlight is a
 // note with empty text (D24): clicking it opens its card for editing.
 
 import {
   anchor,
+  anchorImage,
   describe,
+  describeImage,
   extractText,
+  imageOffset,
+  imageSelectorOf,
+  quoteLabel,
   offsetsToRange,
   rangeToOffsets,
   type Annotation,
@@ -21,12 +27,27 @@ import {
 } from "@thundernotes/core";
 import { COLOUR_NAMES, DEFAULT_COLOUR, colourOf, darker, hasConflict, labelColourCss, restorable, rgba, setAlwaysShowYear, textOn, type LabelColours } from "@thundernotes/core";
 import { CARD_CSS, type Draft } from "./card.js";
+import { openForEditing } from "./focus-edit.js";
 import { cardMiddle, lineBands, passageMiddle } from "./connectors.js";
 import { MOD, SWATCH_CSS, colourItem, openMenu, swatch, type MenuItem } from "./edit-menu.js";
 import { EMAIL_NOTE_ID, MARGIN_CSS, Margin, emailNoteAnnotation, type CardBox, type CardStatus } from "./margin.js";
 import type { ContextInfo, ListState, Responses, ToBackground, ToContent } from "./protocol.js";
 
 const MARK_CLASS = "thundernotes-hl";
+/** A highlighted picture (D46): framed, not wrapped (a wrapper could change the email's layout). */
+const IMG_CLASS = "thundernotes-hl-img";
+/** Any piece of a highlight: text marks and pictures. */
+const HL_SELECTOR = `mark.${MARK_CLASS}, img.${IMG_CLASS}`;
+
+/** The highlight a piece belongs to. A picture keeps its id apart, the email may use data-id. */
+function hlIdOf(el: HTMLElement): string | undefined {
+  return el.tagName === "IMG" ? el.dataset.thundernotesId : el.dataset.id;
+}
+
+/** The highlight piece at an event's target, if any. */
+function hlAt(target: EventTarget | null): HTMLElement | null {
+  return ((target as Element | null)?.closest?.(HL_SELECTOR) as HTMLElement | null) ?? null;
+}
 
 /** This email's Message-ID (from "load"): drafts are stored under it, and every request names it. */
 let ref = "";
@@ -129,8 +150,20 @@ function applyMarkColour(id: string): void {
   }
 }
 
+/** A highlight's pieces: its marks, or its picture. */
 function marksOf(id: string): HTMLElement[] {
-  return [...document.querySelectorAll<HTMLElement>(`mark.${MARK_CLASS}[data-id="${CSS.escape(id)}"]`)];
+  const q = CSS.escape(id);
+  return [...document.querySelectorAll<HTMLElement>(`mark.${MARK_CLASS}[data-id="${q}"], img.${IMG_CLASS}[data-thundernotes-id="${q}"]`)];
+}
+
+const MARK_VARIABLES = ["--tn-c-bg", "--tn-c-active", "--tn-c-partial", "--tn-c-frame", "--tn-c-fg"];
+
+/** Frames a highlighted picture (D46). */
+function frameImage(img: HTMLElement, id: string): void {
+  img.classList.add(IMG_CLASS);
+  img.dataset.thundernotesId = id;
+  markNote(id);
+  applyMarkColour(id);
 }
 
 /** Highlights with a note get a frame (see content.css). */
@@ -158,6 +191,14 @@ function highlightRect(id: string): DOMRect | null {
 
 function unwrap(id: string): void {
   for (const mark of marksOf(id)) {
+    if (mark.tagName === "IMG") {
+      mark.classList.remove(IMG_CLASS, `${MARK_CLASS}-note`, `${MARK_CLASS}-active`);
+      if (!mark.classList.length) mark.removeAttribute("class");
+      delete mark.dataset.thundernotesId;
+      for (const v of MARK_VARIABLES) mark.style.removeProperty(v);
+      if (!mark.style.length) mark.removeAttribute("style");
+      continue;
+    }
     const parent = mark.parentNode!;
     while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
     parent.removeChild(mark);
@@ -207,7 +248,8 @@ document.documentElement.appendChild(host);
 // "Cmd/Ctrl+K opens the link picker" (on unless switched off, D39),
 // "Adjust text colour in highlights for contrast" (on unless switched off, D29),
 // "Use last highlight colour for new highlights" (on unless switched off; else yellow, D29),
-// "Past dates shown in red" (on unless switched off, D38).
+// "Past dates shown in red" (on unless switched off, D38),
+// "Use empty space beside the email content for notes" (on unless switched off, D23).
 const HINTS_KEY = "showEditHints";
 const CYCLE_KEY = "checkboxCycleToText";
 const RENUMBER_KEY = "renumberLists";
@@ -235,6 +277,8 @@ let labelColours: LabelColours = {};
 const labelStyle = document.createElement("style");
 shadow.append(labelStyle);
 const OVERDUE_KEY = "pastDatesRed";
+const EMPTY_SPACE_KEY = "useEmptySpace";
+let useEmptySpace = true;
 const YEAR_KEY = "hideCurrentYear";
 let cycleToText = false;
 let renumber = true;
@@ -254,6 +298,10 @@ function applySettings(s: Record<string, unknown>): void {
     setAlwaysShowYear(yearShown);
   }
   if (CYCLE_KEY in s) cycleToText = s[CYCLE_KEY] === true;
+  if (EMPTY_SPACE_KEY in s) {
+    useEmptySpace = s[EMPTY_SPACE_KEY] !== false;
+    margin?.refit();
+  }
   if (RENUMBER_KEY in s) renumber = s[RENUMBER_KEY] !== false;
   if (PICKER_KEY in s) linkPicker = s[PICKER_KEY] !== false;
   if (CONTRAST_KEY in s) document.documentElement.classList.toggle("thundernotes-contrast", s[CONTRAST_KEY] !== false);
@@ -266,7 +314,7 @@ function applySettings(s: Record<string, unknown>): void {
   renderAddDots();
 }
 document.documentElement.classList.add("thundernotes-contrast"); // default on
-browser.storage.local.get([HINTS_KEY, CYCLE_KEY, RENUMBER_KEY, PICKER_KEY, CONTRAST_KEY, USE_LAST_KEY, LAST_KEY, OVERDUE_KEY, LABEL_SETTINGS_KEY, YEAR_KEY, LINES_SCREEN_KEY, LINES_PRINT_KEY]).then(applySettings);
+browser.storage.local.get([HINTS_KEY, CYCLE_KEY, RENUMBER_KEY, PICKER_KEY, CONTRAST_KEY, USE_LAST_KEY, LAST_KEY, OVERDUE_KEY, LABEL_SETTINGS_KEY, YEAR_KEY, LINES_SCREEN_KEY, LINES_PRINT_KEY, EMPTY_SPACE_KEY]).then(applySettings);
 browser.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   applySettings(Object.fromEntries(Object.entries(changes).map(([k, v]) => [k, v.newValue])));
@@ -412,6 +460,7 @@ function createMargin(collapsed: boolean, width: number | null): Margin {
       isFolded: (id) => folded.has(id),
       draftFor,
       laidOut: (cards, active) => drawLines(cards, active),
+      useEmptySpace: () => useEmptySpace,
       textOrder: (id) => {
         if (id === EMAIL_NOTE_ID) return -1; // first of the cards without a highlight
         const r = results.get(id);
@@ -459,6 +508,15 @@ function renderAll(): void {
   // which collapses that range (seen with a restored highlight inside a longer one).
   const pending: { id: string; result: Anchored }[] = [];
   for (const a of set.annotations) {
+    const image = imageSelectorOf(a);
+    if (image) {
+      // A picture is framed at once: that changes neither the text nor the other ranges.
+      const { element, result } = anchorImage(document.body, ex, image);
+      results.set(a.id, result);
+      if (element instanceof HTMLElement && !hlIdOf(element)) frameImage(element, a.id);
+      else if (element) results.set(a.id, { status: "orphan" }); // the same picture twice: framed once
+      continue;
+    }
     const { quote, position } = selectors(a);
     const result: AnchorResult = quote ? anchor(ex.text, quote, position) : { status: "orphan" };
     results.set(a.id, result);
@@ -500,6 +558,28 @@ async function highlightSelection(withNote = false, colour = newColour()): Promi
   if (withNote) openCard(annotation.id);
 }
 
+/** Highlights the right-clicked picture (D46); with `withNote`, opens the card to write a note. */
+async function highlightImage(withNote: boolean, colour = newColour()): Promise<void> {
+  const img = contextImage;
+  if (isCarrier || !img || !document.body.contains(img) || hlIdOf(img)) return;
+  const ex = extractText(document.body);
+  const now = new Date().toISOString();
+  const annotation: Annotation = {
+    id: newId(),
+    selectors: [describeImage(document.body, ex, img)],
+    bodyMd: "",
+    colour,
+    created: now,
+    updated: now,
+  };
+  set = await send({ type: "add", annotation });
+  const offset = imageOffset(ex, img);
+  results.set(annotation.id, { status: "anchored", method: "position", start: offset, end: offset });
+  frameImage(img, annotation.id);
+  await reportStatus();
+  if (withNote) openCard(annotation.id);
+}
+
 /** Changes a highlight's colour (any of the ways to choose, D29). */
 async function setColour(id: string, colour: string): Promise<void> {
   chose(colour);
@@ -529,10 +609,11 @@ function openCard(id: string, edit = true, line?: number): boolean {
  * the cursor is placed again, now in a focused editor.
  */
 function openForTask(id: string, line: number): boolean {
-  if (!openCard(id, true, line)) return false;
-  void send({ type: "focusPane" }).then(() => openCard(id, true, line));
-  return true;
+  return openForEditing(() => openCard(id, true, line), () => send({ type: "focusPane" }));
 }
+
+/** The popup closes once this message is answered; it would take the focus back if moved sooner. */
+const POPUP_CLOSING_MS = 150;
 
 function cardStatus(id: string): CardStatus {
   const status = results.get(id)?.status;
@@ -564,7 +645,7 @@ async function listState(): Promise<ListState> {
   const items = (set?.annotations ?? [])
     .map((a) => ({
       id: a.id,
-      quote: selectors(a).quote?.exact ?? "",
+      quote: quoteLabel(a) ?? "",
       bodyMd: a.bodyMd,
       colour: colourOf(a.colour).name,
       status: results.get(a.id)?.status ?? ("orphan" as const),
@@ -589,8 +670,8 @@ async function refresh(): Promise<void> {
 
 /** Highlights and cards drawn again from freshly loaded notes. */
 async function redraw(loaded: Responses["load"]): Promise<void> {
-  const drawn = document.querySelectorAll<HTMLElement>(`mark.${MARK_CLASS}`);
-  for (const id of new Set([...drawn].map((m) => m.dataset.id ?? ""))) unwrap(id);
+  const drawn = document.querySelectorAll<HTMLElement>(HL_SELECTOR);
+  for (const id of new Set([...drawn].map((m) => hlIdOf(m) ?? ""))) unwrap(id);
   set = loaded.set;
   folded = new Set(loaded.folded);
   drafts = await readDrafts();
@@ -633,11 +714,12 @@ function linkOf(target: EventTarget | null): HTMLAnchorElement | null {
 
 document.addEventListener("mouseup", (e) => {
   if (inUi(e) || !isPrimaryClick(e)) return;
-  const mark = (e.target as Element | null)?.closest?.(`mark.${MARK_CLASS}`) as HTMLElement | null;
-  if (mark?.dataset.id && document.getSelection()?.isCollapsed) {
+  const mark = hlAt(e.target);
+  const id = mark && hlIdOf(mark);
+  if (id && document.getSelection()?.isCollapsed) {
     if (linkOf(mark)) return; // a highlighted link: the click listener below asks what to do
     addBox.style.display = "none";
-    openCard(mark.dataset.id);
+    openCard(id);
     return;
   }
   // Let the selection settle first.
@@ -655,9 +737,9 @@ document.addEventListener(
   "click",
   (e) => {
     if (inUi(e) || e.button !== 0 || e.metaKey || e.ctrlKey) return;
-    const mark = (e.target as Element | null)?.closest?.(`mark.${MARK_CLASS}`) as HTMLElement | null;
+    const mark = hlAt(e.target);
     const link = linkOf(mark);
-    const id = mark?.dataset.id;
+    const id = mark ? hlIdOf(mark) : undefined;
     if (!link || !id || !document.getSelection()?.isCollapsed) return;
     e.preventDefault(); // no navigation
     e.stopPropagation();
@@ -701,8 +783,8 @@ document.addEventListener("mousedown", (e) => {
 // Hovering a highlight emphasises its card.
 let hovered: string | null = null;
 document.addEventListener("mouseover", (e) => {
-  const mark = (e.target as Element | null)?.closest?.(`mark.${MARK_CLASS}`) as HTMLElement | null;
-  const id = mark?.dataset.id ?? null;
+  const mark = hlAt(e.target);
+  const id = (mark && hlIdOf(mark)) ?? null;
   if (id === hovered) return;
   if (hovered) margin.hover(hovered, false);
   hovered = id;
@@ -747,14 +829,18 @@ document.addEventListener("keydown", (e) => {
 // from document listeners: cards are detected by a listener on the shadow root itself.
 let contextTarget: string | null = null;
 let contextInEditor = false;
+/** A picture right-clicked that isn't highlighted yet: offered "Highlight picture" (D46). */
+let contextImage: HTMLElement | null = null;
 document.addEventListener("contextmenu", (e) => {
   if (inUi(e)) return;
-  const mark = (e.target as Element | null)?.closest?.(`mark.${MARK_CLASS}`) as HTMLElement | null;
-  contextTarget = mark?.dataset.id ?? null;
+  const mark = hlAt(e.target);
+  contextTarget = (mark && hlIdOf(mark)) ?? null;
   contextInEditor = false;
+  const img = (e.target as Element | null)?.closest?.("img") as HTMLElement | null;
+  contextImage = !contextTarget && img && document.body.contains(img) ? img : null;
   // On a highlight (nothing selected): our own menu instead of Thunderbird's, the same as on
   // the cards, with the real colour dots (Thunderbird's menu shows no icons in it, D29).
-  if (mark?.dataset.id && document.getSelection()?.isCollapsed !== false) {
+  if (mark && contextTarget && document.getSelection()?.isCollapsed !== false) {
     e.preventDefault();
     e.stopPropagation();
     openHighlightMenu(mark, e);
@@ -763,7 +849,7 @@ document.addEventListener("contextmenu", (e) => {
 
 /** The right-click menu of a highlight: colours, the note, the link it's in, Copy, delete. */
 function openHighlightMenu(mark: HTMLElement, e: MouseEvent): void {
-  const id = mark.dataset.id!;
+  const id = hlIdOf(mark)!;
   const annotation = set?.annotations.find((a) => a.id === id);
   if (!annotation) return;
   const link = linkOf(mark);
@@ -773,9 +859,9 @@ function openHighlightMenu(mark: HTMLElement, e: MouseEvent): void {
     colourItem(colourOf(annotation.colour).name, (name) => void setColour(id, name)),
     { label: annotation.bodyMd ? "Edit note" : "Add note", separator: true, run: () => void openCard(id) },
     ...(href ? [{ label: /^mid:/i.test(href) ? "Open email" : "Open link", run: () => void send({ type: "openLink", url: href }) }] : []),
-    { label: "Copy", kbd: `${MOD}C`, run: () => send({ type: "writeClipboard", text }) },
+    ...(text ? [{ label: "Copy", kbd: `${MOD}C`, run: () => send({ type: "writeClipboard", text }) }] : []),
     ...(annotation.bodyMd ? [{ label: "Copy note as Markdown", run: () => void send({ type: "copyMarkdown", what: "note", id, md: annotation.bodyMd }) }] : []),
-    { label: annotation.bodyMd ? "Delete note and highlight" : "Remove highlight", danger: true, separator: true, run: () => removeHighlight(id) },
+    { label: annotation.bodyMd ? "Delete note and highlight" : mark.tagName === "IMG" ? "Remove highlight from picture" : "Remove highlight", danger: true, separator: true, run: () => removeHighlight(id) },
   ];
   openMenu(linkMenuHost, e, items, margin?.leftEdge() ?? undefined);
 }
@@ -799,6 +885,7 @@ function contextInfo(): ContextInfo {
     target: annotation ? { hasNote: !!annotation.bodyMd, colour: colourOf(annotation.colour).name } : null,
     inEditor: contextInEditor,
     selectionInBody,
+    image: !!contextImage && !contextInEditor && !isCarrier,
     hasNotes: !!set && (set.annotations.some((a) => a.bodyMd) || !!set.emailNoteMd),
   };
 }
@@ -826,6 +913,8 @@ browser.runtime.onMessage.addListener((message: ToContent) => {
   switch (message?.type) {
     case "highlightSelection":
       return highlightSelection();
+    case "highlightImage":
+      return highlightImage(message.withNote);
     case "setDebug":
       setDebug(message.on);
       return undefined;
@@ -845,7 +934,9 @@ browser.runtime.onMessage.addListener((message: ToContent) => {
       focus(message.id);
       return undefined;
     case "editEmailNote":
-      focus(EMAIL_NOTE_ID);
+      // Clicked to write: edit, also when the popup click left the focus outside the email.
+      window.focus();
+      openForEditing(() => openCard(EMAIL_NOTE_ID, true), () => send({ type: "focusPane" }), POPUP_CLOSING_MS);
       return undefined;
     case "isEditing":
       return Promise.resolve(margin?.isEditing() ?? false);
@@ -946,7 +1037,7 @@ function drawLines(cards: CardBox[], active: string | null): void {
   const lines: { line: SVGLineElement; mark: HTMLElement }[] = [];
   for (const card of cards) {
     if (card.id === EMAIL_NOTE_ID) continue;
-    const parts = [...document.querySelectorAll<HTMLElement>(`mark.${MARK_CLASS}[data-id="${CSS.escape(card.id)}"]`)].flatMap((mark) =>
+    const parts = marksOf(card.id).flatMap((mark) =>
       [...mark.getClientRects()].map((rect) => ({ mark, rect })),
     );
     const mid = passageMiddle(parts.map((p) => p.rect));
@@ -985,7 +1076,9 @@ function drawLinesForPrint(lines: { line: SVGLineElement; mark: HTMLElement }[])
     anchor.className = "thundernotes-line-anchor";
     // Inline styles, important: the email's own CSS for span or svg must not move them.
     anchor.style.cssText = "display:inline !important;position:static !important;margin:0 !important;padding:0 !important;";
-    mark.prepend(anchor);
+    // A picture can't hold the marker: it goes just before it.
+    if (mark.tagName === "IMG") mark.before(anchor);
+    else mark.prepend(anchor);
     printAnchors.push(anchor);
     const at = (name: string) => Number(line.getAttribute(name));
     let origin: { x: number; y: number } | null = null;

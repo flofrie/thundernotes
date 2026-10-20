@@ -5,7 +5,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>ThunderNotes</title>
+  <title>ThunderNotes Settings</title>
   <style>
     /* Settings in cards by area, switches on the right, live examples where a setting changes a look. */
     :root { color-scheme: light dark;
@@ -88,7 +88,7 @@
 
   <section class="card" id="highlights">
     <h2>Highlights</h2>
-    <p class="summary">How highlights look in the email.</p>
+    <p class="summary">How highlights and notes sit in the email.</p>
     <div class="example" id="highlightExample" aria-hidden="true"></div>
     <label class="row"><span class="text"><span class="title">Use the last colour for new highlights</span>
       <small>Off: new highlights are always yellow.</small></span>
@@ -96,6 +96,17 @@
     <label class="row"><span class="text"><span class="title">Adjust the text colour in highlights for contrast</span>
       <small>Black or white text on highlights, whichever is easier to read (the note cards always do this).</small></span>
       <input type="checkbox" role="switch" id="contrastText"></label>
+    <label class="row"><span class="text"><span class="title">Use empty space beside the email content for notes</span>
+      <small>When an email shows its content in a column with empty space beside it (as many newsletters do), the notes go there and the email is narrowed only as far as needed. Off: the email is always narrowed by the full width of the notes.</small></span>
+      <input type="checkbox" role="switch" id="useEmptySpace"></label>
+  </section>
+
+  <section class="card" id="messagelist">
+    <h2>Message list</h2>
+    <p class="summary">What ThunderNotes shows in Thunderbird's list of emails.</p>
+    <label class="row"><span class="text"><span class="title">Show the email note's preview in the cards view</span>
+      <small>One line of the note on the whole email, in its colour, where the card has room for it: with 3 rows per card next to the icons, with 2 rows next to the date. Longer notes end in "…"; the whole text shows when you point at it.</small></span>
+      <input type="checkbox" role="switch" id="cardPreview"></label>
   </section>
 
   <section class="card" id="writing">

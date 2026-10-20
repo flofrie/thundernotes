@@ -23,8 +23,8 @@ async function editing(c: { el: HTMLElement }): Promise<void> {
   if (!c.el.classList.contains("fallback")) throw new Error("the editor didn't open");
 }
 
-function card(bodyMd: string, save: (id: string, md: string) => Promise<void> = async () => {}) {
-  const annotation: Annotation = { id: "a1", selectors: [{ type: "TextQuoteSelector", exact: "q" }], bodyMd, created: "", updated: "" };
+function card(bodyMd: string, save: (id: string, md: string) => Promise<void> = async () => {}, selectors: Annotation["selectors"] = [{ type: "TextQuoteSelector", exact: "q" }]) {
+  const annotation: Annotation = { id: "a1", selectors, bodyMd, created: "", updated: "" };
   const drafts: (string | null)[] = [];
   const saved: string[] = [];
   const copied: number[] = [];
@@ -184,5 +184,14 @@ describe("note card", () => {
     expect(menu(empty!).some((li) => li.textContent === "Copy task as Markdown")).toBe(false);
     menu(task!).find((li) => li.textContent === "Copy task as Markdown")!.click();
     expect(copied).toEqual([1]);
+  });
+});
+
+describe("a note on a picture (D46)", () => {
+  it("shows the picture's label, and is not the note on the whole email", () => {
+    const { c } = card("", undefined, [{ type: "ImageSelector", src: "part:1.2", index: 0, alt: "Team photo" }]);
+    expect(c.el.querySelector(".quote")!.textContent).toContain("🖼 Team photo");
+    expect(c.el.querySelector(".quote")!.textContent).not.toContain("“");
+    expect(c.el.classList.contains("email")).toBe(false);
   });
 });

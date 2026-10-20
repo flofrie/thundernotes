@@ -11,6 +11,27 @@
         "parameters": []
       },
       {
+        "name": "setCardPreviews",
+        "type": "function",
+        "async": true,
+        "description": "The whole-email notes' one-line previews for the message list's cards, by '<account id>|<Message-ID>': the text and the note's colours for its lozenge (empty: none shown).",
+        "parameters": [
+          {
+            "name": "previews",
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "text": { "type": "string" },
+                "background": { "type": "string" },
+                "color": { "type": "string" },
+                "border": { "type": "string" }
+              }
+            }
+          }
+        ]
+      },
+      {
         "name": "getGlobalSearch",
         "type": "function",
         "async": true,

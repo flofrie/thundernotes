@@ -52,7 +52,9 @@ envelope (`X-Annot-Version: 1`), export settings (`version: 1`), and settings-ca
 - An optional field may be added within a version only when ignoring or dropping it is safe.
   Keep existing fields' meaning and defaults. Update schemas, documentation and generated-file
   tests together. The format-2 base lists are an example: `text_base` remains the first hash for
-  older readers that do not understand `text_bases`.
+  older readers that do not understand `text_bases`. Another is `image` (a note on a picture,
+  D46): with `quote: ""` older readers place the note nowhere and keep its text; one that
+  rewrites the carrier drops the field, so the note stays but no longer finds its picture.
 - A new required field, incompatible body framing or changed meaning requires a new version
   and a new versioned schema. Keep the older schema and reference files as the old contract.
   A format-2 reader already refuses newer Markdown versions, and the export-settings reader

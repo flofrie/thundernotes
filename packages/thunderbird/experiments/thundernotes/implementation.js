@@ -28,6 +28,11 @@
 //    print its notes (a DOM event the display script listens for), then opens the print dialog
 //    as Thunderbird's own "Print…" does (top.PrintUtils.startPrintWindow, about3Pane.js /
 //    aboutMessage.js). Without "Print…" in a menu, the items go to its end.
+// 8. The post-it in the message list's cards view too (D26): cards don't show custom columns
+//    (thread-card.mjs fills a fixed template). Each about:3pane's ThreadCard.fillRow is wrapped
+//    to add the icon to the card's icons (attachment, tags) for messages with `$annotated`, and
+//    a one-line preview of the whole-email note where the card has room (the add-on hands the
+//    previews over: setCardPreviews; this code never reads the notes); undone when it stops.
 
 "use strict";
 
@@ -53,9 +58,12 @@ function isAnnotated(msgHdr) {
   return msgHdr.getStringProperty("keywords").split(" ").includes(TAG_KEY);
 }
 
+/** The column's (and cards') icon, set at startup. */
+let iconUrl = "";
+
 function registerColumn(extension) {
   // 16 px file: icon cells use the image's own size.
-  const iconUrl = extension.baseURI.resolve("icons/column.svg");
+  iconUrl = extension.baseURI.resolve("icons/column.svg");
   // A previous run may not have cleaned up (crash, reload). Only then: removing a column that
   // isn't there makes every message list log an error (nsIMsgDBView.removeColumnHandler).
   const columns = lazy.ThreadPaneColumns.getCustomColumns?.() ?? [{ id: COLUMN_ID }];
@@ -247,10 +255,276 @@ function addPrintItems(doc, anchorId, popupId) {
   doc.defaultView.addEventListener("unload", () => printCleanups.delete(cleanup), { once: true });
 }
 
-/** about:3pane and about:message documents (they hold the right-click menus). */
+// ---- 8. The post-it on cards -----------------------------------------------------------------------
+
+const CARD_ICON_CLASS = "thundernotes-card-icon";
+const CARD_PREVIEW_CLASS = "thundernotes-card-preview";
+/** Undoes the wrapped fillRow and the icons, per about:3pane window. */
+const cardCleanups = new Set();
+/** Previews of whole-email notes by "<account id>|<Message-ID>" (setCardPreviews): text and colours. */
+let cardPreviews = new Map();
+/** Redraws the cards of each about:3pane window that has the hook (for new previews). */
+const cardRedraws = new Set();
+/** A preview cut down to less than this is hidden (a short one, shown whole, never is). */
+const PREVIEW_MIN_WIDTH = 120;
+let previewLookupWarned = false;
+
+/**
+ * The message shown by a card of the message list in `win`. Through the page's own objects: the
+ * list (gDBView) and the card's row (_index) are set by its scripts and hidden from this code
+ * otherwise. The window comes from the hook, not the card: an unwrapped card has no ownerGlobal
+ * (seen by the owner: "unwrapped(...) is undefined"). Throws for group headers.
+ */
+function messageOfCard(card, win) {
+  return unwrapped(win).gDBView?.getMsgHdrAt(unwrapped(card)._index);
+}
+
+/** The key of a card's email in cardPreviews, or null (a group header, or it can't be told). */
+function cardPreviewKey(card, win) {
+  try {
+    const hdr = messageOfCard(card, win);
+    if (!hdr) return null;
+    const account = lazy.MailServices.accounts.findAccountForServer(hdr.folder.server)?.key ?? "";
+    return `${account}|${hdr.messageId}`;
+  } catch (e) {
+    // Group headers ("dummy" rows) throw too; those have no tags element filled.
+    if (!previewLookupWarned && card.querySelector("thread-card-tags")?.hasAttribute("tags")) {
+      previewLookupWarned = true;
+      console.warn("ThunderNotes: card previews: can't tell which email a card shows", e);
+    }
+    return null;
+  }
+}
+
+/** Narrower cards show no preview: there a lozenge would crowd the sender, subject or icons. */
+const PREVIEW_MIN_CARD_WIDTH = 560;
+
+/** The share of a line's free room a preview may take (the owner's wish). */
+const PREVIEW_SHARE = 0.75;
+
+const widthOf = (el) => el.getBoundingClientRect().width;
+
+/**
+ * What the sender's name needs: its text's width, plus its padding. Not its box: Thunderbird
+ * stretches the sender across the free room (and scrollWidth is at least the box), which counted
+ * the room as taken (seen in a render: the preview cut short with room to spare).
+ */
+function senderNeed(sender) {
+  const range = sender.ownerDocument.createRange();
+  range.selectNodeContents(sender);
+  const text = range.getBoundingClientRect().width;
+  const style = sender.ownerDocument.defaultView?.getComputedStyle(sender);
+  return Math.ceil(text + (parseFloat(style?.paddingInlineStart) || 0) + (parseFloat(style?.paddingInlineEnd) || 0));
+}
+
+/**
+ * The widest a preview may be, in px: PREVIEW_SHARE of its line's free room, measured once
+ * Thunderbird has laid the card out. With 2 rows the line is the first one, and the others on it
+ * need the sender's whole name (senderNeed, also where it is cut short), the date and the rest;
+ * with 3 rows the third line, less the icons and the replies button. A limit in px counts when
+ * the list's width is worked out, so it can't widen the list (a percentage could). Null: not
+ * measurable (no line).
+ */
+function previewLimit(preview) {
+  const box = preview.parentElement;
+  const view = preview.ownerDocument.defaultView;
+  if (!box || !view) return null;
+  const gap = parseFloat(view.getComputedStyle(box).columnGap) || 0;
+  const others = [...box.children].filter((el) => el !== preview && !el.hidden && widthOf(el) > 0);
+  let need = others.reduce((sum, el) => sum + (el.classList.contains("sender") ? senderNeed(el) : widthOf(el)) + gap, 0);
+  need += (parseFloat(preview.style.marginInlineStart) || 0) + (parseFloat(preview.style.marginInlineEnd) || 0);
+  let width = box.clientWidth;
+  if (box.classList.contains("thread-card-icon-info")) {
+    // The icons box is only as wide as its content: the room is its line's.
+    const line = box.parentElement;
+    if (!line) return null;
+    width = line.clientWidth;
+    const button = line.querySelector(".thread-card-button");
+    if (button && widthOf(button) > 0) need += widthOf(button) + gap;
+  }
+  return Math.max(0, Math.floor(PREVIEW_SHARE * (width - need)));
+}
+
+/**
+ * Left out on narrow cards; else as wide as PREVIEW_SHARE of its line's free room allows
+ * (previewLimit), hidden where that cuts it below PREVIEW_MIN_WIDTH.
+ */
+function fitPreview(preview) {
+  const pill = preview.firstElementChild;
+  if (!pill || preview.dataset.text === undefined) return;
+  const card = preview.closest("td") ?? preview.parentElement;
+  preview.hidden = !preview.dataset.text || (card?.getBoundingClientRect().width ?? Infinity) < PREVIEW_MIN_CARD_WIDTH;
+  if (preview.hidden) return;
+  const limit = previewLimit(preview);
+  if (limit !== null) pill.style.maxInlineSize = `${limit}px`;
+  const cut = pill.scrollWidth > pill.clientWidth + 1;
+  preview.style.visibility = cut && pill.clientWidth < PREVIEW_MIN_WIDTH ? "hidden" : "";
+}
+
+/**
+ * A card's preview, a lozenge in the note's colour (as the margin's cards), as wide as its text
+ * up to a limit, ending in "…" when longer, right-aligned (the owner's choice): with 3 rows on
+ * the third line right before the icons, inside Thunderbird's own icons box, which Thunderbird
+ * already puts at the line's right end as wide as its content (stretching that box across the
+ * line put it, with the star, short of the edge in Thunderbird; seen by the owner); with 2 rows
+ * on the first line right before the date, at most half the line (the sender keeps
+ * Thunderbird's own sizing and fills the rest; changing it shifted the date).
+ * The message list is a table sized to its content, and a percentage limit doesn't count when a
+ * browser works out what its content needs: a long note widened the whole list, pushing every
+ * date out of view. So the lozenge has a limit that does count: in px, measured (fitPreview,
+ * up to PREVIEW_SHARE of the line's free room); until measured 27 em on the first line, 20 em
+ * in the icons box (which can't shrink below its content).
+ */
+function placePreview(card, data, win) {
+  const text = data?.text ?? "";
+  let preview = card.querySelector(`.${CARD_PREVIEW_CLASS}`);
+  if (!text) {
+    if (preview) (preview.hidden = true), (preview.dataset.text = "");
+    return;
+  }
+  const sender = card.querySelector(".sender");
+  const icons = card.querySelector(".thread-card-icon-info");
+  if (!preview) {
+    const doc = card.ownerDocument;
+    preview = doc.createElement("span");
+    preview.className = CARD_PREVIEW_CLASS;
+    preview.style.cssText = "flex:0 1 auto;min-inline-size:0;display:flex;align-items:center;justify-content:flex-end;";
+    // Shorter than the card's line, its outline drawn inside (an inset shadow, no border): the
+    // card's lines are as high as their text and cut off what sticks out, which took the
+    // outline's top and bottom (seen by the owner).
+    const pill = doc.createElement("span");
+    pill.style.cssText =
+      // No font size of its own: the card's text size, as the subject's (the owner's wish).
+      "min-inline-size:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" +
+      "line-height:1.3;padding:0 8px;border-radius:999px;box-sizing:border-box;";
+    preview.append(pill);
+  }
+  const pill = preview.firstElementChild;
+  pill.style.background = data.background ?? "";
+  pill.style.color = data.color ?? "";
+  pill.style.boxShadow = data.border ? `inset 0 0 0 1px ${data.border}` : "";
+  if (card.closest(".cards-row-compact") && sender) {
+    sender.after(preview);
+    preview.style.marginInlineStart = "12px";
+    preview.style.marginInlineEnd = "4px";
+    if (!pill.style.maxInlineSize.endsWith("px")) pill.style.maxInlineSize = "27em";
+  } else if (icons) {
+    icons.prepend(preview);
+    preview.style.marginInlineStart = "12px";
+    preview.style.marginInlineEnd = "0";
+    if (!pill.style.maxInlineSize.endsWith("px")) pill.style.maxInlineSize = "20em";
+  }
+  pill.textContent = text;
+  preview.title = text;
+  preview.dataset.text = text;
+  preview.hidden = false;
+  win.requestAnimationFrame(() => fitPreview(preview));
+}
+
+/** The page's own object behind a wrapper (values its scripts set, like gDBView or a row's _index). */
+function unwrapped(obj) {
+  try {
+    return ChromeUtils.waiveXrays(obj);
+  } catch {
+    return obj;
+  }
+}
+
+/**
+ * Whether a card's message has notes. First the tags Thunderbird wrote on the card
+ * (`<thread-card-tags tags="… $annotated">`, filled just before): a plain attribute, always
+ * readable from here. The message list's own values (gDBView, the row's index) can be hidden
+ * from this Experiment's code (seen in testing: no card got the icon), so they are only the
+ * fallback, read through unwrapped().
+ */
+function cardAnnotated(card, win) {
+  const tags = card.querySelector("thread-card-tags")?.getAttribute("tags");
+  if (tags) return tags.split(" ").includes(TAG_KEY);
+  try {
+    // Group headers ("dummy" rows) have no message: getMsgHdrAt throws.
+    const hdr = messageOfCard(card, win);
+    return !!hdr && isAnnotated(hdr);
+  } catch {
+    return false;
+  }
+}
+
+/** One card: the post-it among its icons if its message has notes, else none. */
+/** One card of the message list in `win`. */
+function markCard(card, win) {
+  const annotated = cardAnnotated(card, win);
+  placePreview(card, annotated && cardPreviews.size ? cardPreviews.get(cardPreviewKey(card, win)) : "", win);
+  let icon = card.querySelector(`.${CARD_ICON_CLASS}`);
+  if (!annotated) return void (icon && (icon.hidden = true));
+  if (!icon) {
+    const doc = card.ownerDocument;
+    icon = doc.createElement("img");
+    icon.className = CARD_ICON_CLASS;
+    icon.src = iconUrl;
+    icon.alt = "ThunderNotes";
+    icon.title = "Has ThunderNotes highlights or notes";
+    icon.style.cssText = "width:16px;height:16px;flex-shrink:0;margin-block-start:1px;";
+    const tags = card.querySelector("thread-card-tags");
+    if (tags) tags.before(icon);
+    else card.querySelector(".thread-card-icon-info")?.prepend(icon);
+  }
+  icon.hidden = false;
+}
+
+/** Wraps the window's ThreadCard.fillRow once (as soon as the element is defined), then redraws. */
+function addCardIcons(win) {
+  const patch = () => {
+    const Card = win.customElements.get("thread-card");
+    if (!Card || Card.prototype.thundernotesFillRow) return;
+    const original = Card.prototype.fillRow;
+    Card.prototype.thundernotesFillRow = original;
+    Card.prototype.fillRow = function () {
+      original.call(this);
+      try {
+        markCard(this, win);
+      } catch (e) {
+        console.warn("ThunderNotes: marking a card failed", e);
+      }
+    };
+    const redraw = () => unwrapped(win).threadTree?.invalidate?.();
+    // The pane resized: previews refitted (cards aren't filled again for that).
+    const tree = win.document.getElementById("threadTree");
+    const observer = tree && win.ResizeObserver ? new win.ResizeObserver(() => {
+      for (const preview of win.document.querySelectorAll(`.${CARD_PREVIEW_CLASS}`)) fitPreview(preview);
+    }) : null;
+    if (tree) observer?.observe(tree);
+    const cleanup = () => {
+      Card.prototype.fillRow = original;
+      delete Card.prototype.thundernotesFillRow;
+      observer?.disconnect();
+      cardRedraws.delete(redraw);
+      for (const el of win.document.querySelectorAll(`.${CARD_ICON_CLASS}, .${CARD_PREVIEW_CLASS}`)) el.remove();
+    };
+    cardCleanups.add(cleanup);
+    cardRedraws.add(redraw);
+    win.addEventListener("unload", () => (cardCleanups.delete(cleanup), cardRedraws.delete(redraw)), { once: true });
+    redraw(); // cards already shown
+  };
+  if (win.customElements.get("thread-card")) patch();
+  else win.customElements.whenDefined("thread-card").then(patch, () => {});
+}
+
+function uninstallCardIcons() {
+  for (const cleanup of cardCleanups) cleanup();
+  cardCleanups.clear();
+}
+
+/** about:3pane and about:message documents (they hold the right-click menus; about:3pane the cards). */
 function addToInnerDocument(doc) {
   const href = doc.location?.href ?? "";
   if (href.startsWith("about:3pane") || href.startsWith("about:message")) addPrintItems(doc, "mailContext-print", "mailContext");
+  if (href.startsWith("about:3pane")) {
+    try {
+      addCardIcons(doc.defaultView);
+    } catch (e) {
+      console.error("ThunderNotes: adding the post-it to cards failed", e);
+    }
+  }
 }
 
 /** New about:3pane / about:message documents (new tabs, windows, a message opened). */
@@ -313,6 +587,11 @@ this.thundernotes = class extends ExtensionCommon.ExtensionAPI {
     if (isAppShutdown) return;
     lazy.ThreadPaneColumns.removeCustomColumn(COLUMN_ID);
     try {
+      uninstallCardIcons();
+    } catch (e) {
+      console.error("ThunderNotes: removing the post-it from cards failed", e);
+    }
+    try {
       uninstallPrintMenus();
     } catch (e) {
       console.error("ThunderNotes: removing Print with Notes from the menus failed", e);
@@ -326,6 +605,10 @@ this.thundernotes = class extends ExtensionCommon.ExtensionAPI {
       thundernotes: {
         async refreshColumn() {
           lazy.ThreadPaneColumns.refreshCustomColumn(COLUMN_ID);
+        },
+        async setCardPreviews(previews) {
+          cardPreviews = new Map(Object.entries(previews ?? {}));
+          for (const redraw of cardRedraws) redraw();
         },
         async prepareCarrierFolder(folderId) {
           const folder = resolveFolder(folderId);

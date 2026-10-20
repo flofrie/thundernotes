@@ -38,9 +38,26 @@ export interface TextPositionSelector {
   end: number;
 }
 
+/**
+ * A whole picture in the email (D46): ThunderNotes' own selector, as the W3C ones select text.
+ * Found by its address, then its place among the pictures and the text around it.
+ */
+export interface ImageSelector {
+  type: "ImageSelector";
+  /** Its address as `imageKey` stores it: the same on every computer. */
+  src: string;
+  /** Its place among the email's pictures, 0 for the first. */
+  index: number;
+  alt?: string;
+  /** The text just before and after it, as for a quote. */
+  prefix?: string;
+  suffix?: string;
+}
+
 export interface Annotation {
   id: string;
-  selectors: Array<TextQuoteSelector | TextPositionSelector>;
+  /** Text: a quote and its position. A picture: one ImageSelector. None: the whole-email note. */
+  selectors: Array<TextQuoteSelector | TextPositionSelector | ImageSelector>;
   colour?: string;
   bodyMd: string;
   created: string;
@@ -130,6 +147,7 @@ export function hasDeletions(set: AnnotationSet | null | undefined): boolean {
 export * from "./anchoring/normalise.js";
 export * from "./anchoring/dom.js";
 export * from "./anchoring/match.js";
+export * from "./anchoring/image.js";
 export * from "./markdown.js";
 export * from "./format.js";
 export * from "./restore.js";
@@ -142,3 +160,4 @@ export { codeLines } from "./markdown-structure.js";
 export * from "./settings.js";
 export * from "./label-colours.js";
 export * from "./label-order.js";
+export * from "./preview.js";

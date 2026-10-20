@@ -98,6 +98,19 @@
           "minItems": 2,
           "maxItems": 2
         },
+        "image": {
+          "type": "object",
+          "description": "A note on a whole picture (D46); quote is then empty.",
+          "required": ["src", "index"],
+          "properties": {
+            "src": { "type": "string" },
+            "index": { "type": "integer", "minimum": 0 },
+            "alt": { "type": "string" },
+            "prefix": { "type": "string" },
+            "suffix": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
         "colour": { "type": "string" },
         "tags": { "type": "array", "items": { "type": "string" } },
         "created": { "$ref": "#/$defs/timestamp" },

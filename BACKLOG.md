@@ -32,6 +32,9 @@ To be converted into GitHub issues and milestones.
 - [x] Stale `$Annotated` tags removed on display; backup reminder until IMAP sync
 - [x] Folder pane: "Update ThunderNotes tags" per folder
 - [x] Whole-email note (card pinned at the top of the margin)
+- [x] (0.75.1) "Note on this email" in the toolbar popup always opens the note for editing: the message pane gets the focus once the popup has closed (it sometimes stayed elsewhere, so the card opened without its editor).
+- [x] (0.75.2, D23) Emails that set a width on their root element (`<html style="width:100%">`) narrow for the notes too, instead of pushing the notes out of view.
+- [ ] Keyboard shortcut while viewing an email: create the whole-email note (or open it, if it exists) and go straight into editing it. Candidate: Cmd/Ctrl+Shift+N with no text selected (with a selection it already highlights and opens a note). The display script's keydown only sees keys while the message pane has the focus; to work from the message list too, it needs a `commands` entry in the manifest, handled in the background and sent to the shown email. Show it in the options page's Keyboard shortcuts card.
 - [x] Cards fold to their quote line (D30); per device, optionally synced
 - [x] Highlighted links: click asks "note or link", Cmd/Ctrl+click opens; Add/Edit note in the right-click menu (D31)
 - [x] IndexedDB annotation store
@@ -78,6 +81,13 @@ To be converted into GitHub issues and milestones.
 - [ ] Sub-task lines for the whole tree: selecting a task shows lines to its sub-tasks, from them to theirs, and so on. Several trunks side by side, the highest level leftmost (the selected task goes out furthest left, down, and in to each sub-task; each sub-task again out to its own), laid out so no lines overlap.
 - [ ] When a third display setting shared by several parts comes up: one "apply display settings" function each part calls (now wired separately: hide current year, past due dates red)
 - [ ] Notion two-way sync
+
+- [x] (0.76.2) Settings page: the header's post-it in 3D (plain WebGL, no library): thickness, folded corner, light; sways, leans towards the pointer, blinks, flips on a click, and a right-click pokes it (0.76.3: briefly angry, red and frowning, instead of the page's long menu; 0.76.4: the anger grows and fades gradually, the menu blocked more firmly; 0.77.1: turns as far left and up as right and down, lit from the front); still with "reduce motion", the flat icon without WebGL.
+- [x] (0.78.0, D26) A one-line preview of the whole-email note on cards (3 rows: the last line; 2 rows: between sender and date), full text on hover; setting, on by default. 0.78.3: a lozenge in the note's colour, ending in "…" when longer; 0.78.5: right-aligned, against the date (2 rows) or the icons (3 rows), never widening the list; 0.78.7: the subject's text size; 0.78.8: up to 75 % of the line's free room, measured.
+- [x] (0.77.2, D26) The post-it on the message list's cards view too (cards show no custom columns): the Experiment adds it among each card's icons for emails with notes (0.77.3: read from the card's own tags, as the message list's values can be hidden from the Experiment).
+- [x] (0.77.0, D47) Settings in a tab of their own: no frame in the Add-ons Manager (its browser menu and a sticking wheel came with it); right-click shows no menu, or only "Copy" with text selected. (0.76.4 had worked around the wheel inside the frame.)
+- [x] (0.76.1, D23) Notes in the empty space beside the email's content (centred newsletter columns): the email narrowed only as far as needed; setting "Use empty space beside the email content for notes", on by default.
+- [x] (0.76.0, D46) Highlights and notes on pictures: right-click a picture to highlight it or add a note; framed in its colour, found again by address, place and surrounding text; an optional `image` field in format 2.
 
 ### From the design review (public issue #1, 2026-10-18)
 - [x] PR #7 follow-up: recover a first frame with a missing/malformed title as an unanchored note; test strict rejection, text/export preservation and the options-page merge/save/reimport path.

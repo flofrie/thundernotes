@@ -98,7 +98,7 @@ real addresses:
 > - `subscribeCarrierFolder`: subscribe that folder again if the user unsubscribed it (unsubscribed folders are invisible to MailExtensions; no subscription API);
 > - `refreshFolder`: fetch that folder's new messages promptly (no fetch API);
 > - `expungeFolder`: remove replaced messages from the server (no expunge or compact API);
-> - `refreshColumn` and the column itself: a message-list column showing which emails have notes (no column API in `mailTabs`);
+> - `refreshColumn` and the column itself: a message-list column showing which emails have notes (no column API in `mailTabs`), and the same icon on the cards view's cards, which show no custom columns (the cards' fill function is wrapped while the add-on runs and restored when it stops), and `setCardPreviews`: one line of the user's own note on the whole email shown on that email's card, handed over by the add-on;
 > - "Print with Notes…" in the File menu and the message context menu (menus can't add to the File menu or the print dialog);
 > - `focusMessagePane`, `focusCurrentTab`: move the keyboard focus after opening an email from the task view (no focus API);
 > - `deviceName`: the computer's name as the default device name (no API).

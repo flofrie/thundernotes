@@ -99,6 +99,8 @@ export interface Responses {
 /** Background -> message display script. */
 export type ToContent =
   | { type: "highlightSelection" }
+  /** Context menu on a picture (D46): highlight it, with `withNote` also open its card. */
+  | { type: "highlightImage"; withNote: boolean }
   | { type: "setDebug"; on: boolean }
   /** What was right-clicked: answers a ContextInfo. */
   | { type: "contextTarget" }
@@ -155,6 +157,8 @@ export interface ContextInfo {
   inEditor: boolean;
   /** A text selection in the email body that could be highlighted. */
   selectionInBody: boolean;
+  /** A picture in the email that isn't highlighted yet (D46). */
+  image: boolean;
   /** The email has notes with text (for "Copy all notes as Markdown"). */
   hasNotes: boolean;
 }

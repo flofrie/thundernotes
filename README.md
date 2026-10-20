@@ -6,13 +6,16 @@ between your computers through your own mail server, and stay plain files you ow
 ## What it does
 
 - **Highlights and notes.** Select text in an email and highlight it in one of eight colours; add a
-  note to it, or to the whole email. Notes sit in a margin beside the email, like comments in a
-  word processor, and never cover it. Optional lines connect each note to its passage.
+  note to it, to a picture (right-click it), or to the whole email. Notes sit in a margin beside
+  the email, like comments in a word processor, and never cover it: newsletters' empty side space
+  is used first. Optional lines connect each note to its passage.
 - **A real Markdown editor.** Live preview while you type (headings, lists, checkboxes, links),
   links to web pages and to other emails, with backlinks.
 - **Tasks.** Every checklist item in a note (`- [ ] …`) is a task. `@friday` or `@24.10.` gives it
   a date, `#name` a label. A task view collects all tasks from all notes: grouped by date, label or
   email, filtered, with sub-tasks, quick actions and a count of overdue tasks on its button.
+- **In the message list.** Emails with notes show a post-it, in the table and the cards view; cards
+  also show a line of the note on the whole email, in its colour.
 - **Sync without an account.** Notes travel through a `ThunderNotes` folder in each IMAP account,
   using Thunderbird's own mail access. No extra login, server or software; edits from two
   computers are combined line by line.

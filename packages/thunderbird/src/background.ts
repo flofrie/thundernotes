@@ -35,7 +35,7 @@ import {
   type Annotation,
   type ColourName,
   type LabelOrderMode,
-  type TextQuoteSelector,
+  quoteLabel,
   type AnnotationSet,
   type EmailRef,
 } from "@thundernotes/core";
@@ -43,6 +43,7 @@ import { EMAIL_NOTE_ID, type Backlink, type EmailCandidate, type ContextInfo, ty
 import { deleteSet, getAllSets, getSet, onSetsChanged, putSet } from "./store.js";
 import { addressOf, collectTasks, emailInfoOf, groupOf, noteAsMarkdown, notesAsMarkdown, taskAsMarkdown, type EmailInfo } from "./task-list.js";
 import { setCounters } from "./badges.js";
+import { CARD_PREVIEW_KEY, cardPreviews } from "./card-previews.js";
 import { moveNotes } from "./move.js";
 import { IGNORED_KEY, deletedState, ignoredKey, isIgnored, type Ignored } from "./deleted.js";
 import { accountByAddress } from "./accounts.js";
@@ -58,6 +59,8 @@ const MENU_COLOUR = "thundernotes-colour";
 const MENU_COPY_LINK = "thundernotes-copy-link";
 const MENU_NOTE = "thundernotes-note";
 const MENU_COPY_ALL = "thundernotes-copy-all";
+const MENU_IMAGE = "thundernotes-image";
+const MENU_IMAGE_NOTE = "thundernotes-image-note";
 const colourMenuId = (name: string) => `${MENU_COLOUR}-${name}`;
 
 /** Debug mode: colour highlights by match type. Kept in storage.local. */
@@ -89,8 +92,10 @@ messenger.storage.onChanged.addListener((changes, area) => {
 });
 
 async function ensureDisplayScript(): Promise<void> {
-  const registered = await messenger.scripting.messageDisplay.getRegisteredScripts({ ids: [SCRIPT_ID] });
-  if (!registered.length) {
+  // All of them, not by id: asking for one that isn't registered yet (every first start) logs
+  // "does not exist" in the Error Console.
+  const registered = await messenger.scripting.messageDisplay.getRegisteredScripts();
+  if (!registered.some((script) => script.id === SCRIPT_ID)) {
     await messenger.scripting.messageDisplay.registerScripts([
       { id: SCRIPT_ID, js: ["dist/content.js"], css: ["content.css"] },
     ]);
@@ -106,6 +111,9 @@ async function createMenus(): Promise<void> {
   await messenger.menus.removeAll();
   messenger.menus.create({ id: MENU_HIGHLIGHT, title: "Highlight", contexts: ["selection"], visible: false });
   messenger.menus.create({ id: MENU_NOTE, title: "Add note", contexts: ["page", "link", "selection"], visible: false });
+  // On a picture that isn't highlighted (D46); a highlighted one opens the add-on's own menu.
+  messenger.menus.create({ id: MENU_IMAGE, title: "Highlight picture", contexts: ["image"], visible: false });
+  messenger.menus.create({ id: MENU_IMAGE_NOTE, title: "Add note to picture", contexts: ["image"], visible: false });
   messenger.menus.create({
     id: MENU_REMOVE,
     title: "Remove highlight",
@@ -149,7 +157,7 @@ async function createMenus(): Promise<void> {
 createMenus().catch((e) => console.error("ThunderNotes: creating menus failed", e));
 
 /** Context-menu contexts inside a displayed message where our items may apply. */
-const MESSAGE_CONTEXTS = new Set(["page", "link", "selection", "editable"]);
+const MESSAGE_CONTEXTS = new Set(["page", "link", "selection", "editable", "image"]);
 
 // Right-click: the display script says what was clicked. Highlight only for a selection
 // in the email body; Remove highlight / Remove note only on a highlight or card; none of
@@ -171,6 +179,8 @@ messenger.menus.onShown.addListener(async (info, tab) => {
     context = await messenger.tabs.sendMessage<ContextInfo>(tab.id, message).catch(() => null);
   }
   await messenger.menus.update(MENU_HIGHLIGHT, { visible: !!context?.selectionInBody && !context.inEditor });
+  await messenger.menus.update(MENU_IMAGE, { visible: !!context?.image });
+  await messenger.menus.update(MENU_IMAGE_NOTE, { visible: !!context?.image });
   const onHighlight = !!context?.target && !context.inEditor;
   await messenger.menus.update(MENU_COLOUR, { visible: onHighlight });
   if (onHighlight) {
@@ -227,6 +237,11 @@ messenger.menus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === MENU_NOTE && tab?.id !== undefined) {
     const message: ToContent = { type: "noteTarget" };
     messenger.tabs.sendMessage(tab.id, message).catch((e) => console.warn("ThunderNotes: note failed", e));
+    return;
+  }
+  if ((info.menuItemId === MENU_IMAGE || info.menuItemId === MENU_IMAGE_NOTE) && tab?.id !== undefined) {
+    const message: ToContent = { type: "highlightImage", withNote: info.menuItemId === MENU_IMAGE_NOTE };
+    messenger.tabs.sendMessage(tab.id, message).catch((e) => console.warn("ThunderNotes: picture highlight failed", e));
     return;
   }
   if (info.menuItemId === MENU_DEBUG) {
@@ -573,7 +588,10 @@ const handlers: { [K in ToBackground["type"]]: Handler<K> } = {
   async copyMarkdown(request, d) {
     const set = await storedSet(d);
     const email = emailInfoOf(set?.email ?? d.email);
-    const quoteOf = (id: string) => set?.annotations.find((a) => a.id === id)?.selectors.find((s): s is TextQuoteSelector => s.type === "TextQuoteSelector")?.exact;
+    const quoteOf = (id: string) => {
+      const a = set?.annotations.find((a) => a.id === id);
+      return a && quoteLabel(a);
+    };
     let text = "";
     if (request.what === "task") {
       const task = taskAt(request.md, request.line);
@@ -675,9 +693,9 @@ type FromPages =
 type TaskDone = { type: "setTaskDone"; accountId?: string; messageId: string; noteId: string; line: number; raw: string; done: boolean };
 
 /**
- * The settings in a tab of their own, at a section (D44: from "email not found" to the orphaned
- * notes): there the page can jump to it (inside the Add-ons Manager it can't scroll). An open one
- * (it answers "optionsTab") is brought to the front.
+ * The settings (a tab of their own, D47) at a section (D44: from "email not found" to the orphaned
+ * notes). An open one (it answers "optionsTab") is brought to the front; else Thunderbird opens it,
+ * and the page goes to the section (optionsFocus).
  */
 async function openOptionsAt(section: string, key?: string): Promise<void> {
   await messenger.storage.local.set({ optionsFocus: { section, key, at: Date.now() } });
@@ -686,7 +704,7 @@ async function openOptionsAt(section: string, key?: string): Promise<void> {
     await messenger.tabs.update(open.tabId, { active: true });
     await messenger.windows.update(open.windowId, { focused: true });
   } else {
-    await messenger.tabs.create({ url: `options.html?tab=1#${section}` });
+    await messenger.runtime.openOptionsPage();
   }
 }
 
@@ -828,6 +846,23 @@ function countOverdueSoon(): void {
 onSetsChanged(countOverdueSoon);
 countOverdueSoon(); // at startup
 
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
+/** The whole-email notes' previews to the message list's cards (D26), a moment after changes. */
+function sendCardPreviewsSoon(): void {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    void (async () => {
+      const on = (await messenger.storage.local.get(CARD_PREVIEW_KEY))[CARD_PREVIEW_KEY] !== false;
+      await messenger.thundernotes.setCardPreviews(on ? cardPreviews(await getAllSets()) : {});
+    })().catch((e) => console.warn("ThunderNotes: card previews", e));
+  }, 500);
+}
+onSetsChanged(sendCardPreviewsSoon);
+messenger.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && CARD_PREVIEW_KEY in changes) sendCardPreviewsSoon();
+});
+sendCardPreviewsSoon(); // at startup
+
 // ---- links between emails (D37) ----------------------------------------------------------------
 
 /** A note to open for editing once its email has loaded (from the task view, D38), by Message-ID. */
@@ -931,8 +966,7 @@ async function backlinksOf(messageId: string, accountId: string | undefined): Pr
     if (set.emailNoteMd && linkedMessageIds(set.emailNoteMd).includes(target)) where.push("");
     for (const a of set.annotations) {
       if (!linkedMessageIds(a.bodyMd).includes(target)) continue;
-      const quote = a.selectors.find((s): s is TextQuoteSelector => s.type === "TextQuoteSelector");
-      where.push(quote?.exact ?? "");
+      where.push(quoteLabel(a) ?? "");
     }
     if (where.length) out.push({ accountId: set.email.accountId, messageId: set.email.messageId, subject: set.email.subject ?? "", from: set.email.from ?? "", date: set.email.date ?? "", quotes: where });
   }

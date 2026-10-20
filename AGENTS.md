@@ -5,7 +5,7 @@ Thunderbird add-on to highlight text in emails and attach Markdown notes; notes 
 This file is the one set of instructions for every agent (Codex, Cursor, Claude …) and every contributor. `CLAUDE.md` only imports it, so Claude Code loads the same text.
 
 ## Read first
-- `docs/DECISIONS.md` — D1–D45, the binding design decisions. Add new ones there (dated, numbered).
+- `docs/DECISIONS.md` — D1–D47, the binding design decisions. Add new ones there (dated, numbered).
 - `docs/SYNC.md` — the normative sync and merge specification (D45); keep it in step with `mergeSets` and `sync.ts`.
 - `BACKLOG.md` — work by phase; tick items off as they land.
 - `docs/concept.md` — the concept (design, data model, formats, IMAP protocol): a snapshot of the owner's living concept doc (https://claude.ai/code/artifact/00ed577b-af03-453c-85d1-e1a3382b6f58, private), refreshed from time to time.
@@ -26,17 +26,19 @@ This file is the one set of instructions for every agent (Codex, Cursor, Claude 
 - Load add-ons via Tools → Developer Tools → Debug Add-ons → Load Temporary Add-on (pick `manifest.json`).
 - The owner commits as `Florian Friedrich <flofrie@users.noreply.github.com>`; contributors use their own name and email.
 
-## Status (2026-10-18)
-- Version **0.75.0** on `main` and in the public repo (released 2026-10-18; the step before 1.0). Build: `npm run build -w @thundernotes/thunderbird`, then load `packages/thunderbird/manifest.json`.
+## Status (2026-10-20)
+- Version **0.78.8** on `main`; the public repo has **0.75.0** (released 2026-10-18; the step before 1.0). Build: `npm run build -w @thundernotes/thunderbird`, then load `packages/thunderbird/manifest.json`.
 - Built:
-  - **Notes:** highlights and Markdown notes in margin cards with lines to their passages (D23, D24); whole-email note; live-preview editor (D28); colours (D29); folding (D30); drafts kept on a crash (D34); restore deleted notes (D33); print with notes; copy a task, a note or all notes as Markdown.
+  - **Message list:** the ThunderNotes column, the post-it on cards and a one-line preview of the whole-email note there (D26).
+  - **Notes:** highlights and Markdown notes in margin cards with lines to their passages (D23, D24); highlights and notes on pictures (D46); whole-email note; notes in the empty space beside an email's content, narrowing only as needed (D23); live-preview editor (D28); colours (D29); folding (D30); drafts kept on a crash (D34); restore deleted notes (D33); print with notes; copy a task, a note or all notes as Markdown.
   - **Sync:** one carrier per email in a `ThunderNotes` folder per IMAP account (D7, D27, D42); merge per part with conflict boxes, several bases per carrier and merging oldest first (D32, D45, `docs/SYNC.md`); deletion records kept a year (D33); unreadable carriers kept and listed (D35); folder restored or subscribed again (D20, D36); label settings per account in a settings carrier (D40, D42); a persisted upload marker (#14); Experiment failures shown in Settings (#12).
   - **Tasks and links:** due dates and labels in checklist items (D38); a task view with filters, grouping, sub-tasks, quick actions and an overdue count; links between emails, backlinks and a link picker (D37, D39).
   - **Accounts and emails:** notes per account, following moved emails (D42); emails in the Trash left alone (D43); notes whose email is gone marked and deletable (D44); no notes on messages without a Message-ID (#8).
   - **Files:** format 2 with separator lines (D25), JSON Schemas in `docs/schemas/`; one markdown-it pipeline for rendering and tasks, kept out of the display script (D22); export and import with `settings.json`, imports repaired instead of failing.
 - The spikes in `spikes/imap-folder/` and `spikes/highlight-anchor/` (results in their READMEs) led to D19 and D21.
 - Tested by the owner in Thunderbird 158 (`Development` profile): re-subscribing (D36), sync warnings (D35), links, backlinks and the link picker (D37, D39), dates and labels, label colours and order, grouping, Done sorting, and 0.47.0 after the format-2 migration.
-- Not yet tested in Thunderbird: quick actions (0.29.0), "Delete for good" in the popup (0.30.0), sub-tasks (0.38.0), and the 0.48.x changes (editing while sync runs, list rendering, the Message-ID notice). Thunderbird 153 ESR, with sync between two physical computers on the same IMAP accounts, was tested by the owner on macOS on 2026-10-18 and works (#24); Windows and Linux aren't tested yet.
+- Tested by the owner in Thunderbird 158 during development (2026-10-19/20): the post-it and note previews in the message list's cards view (0.78.8), settings in a tab of their own and the 3D post-it (0.77.x), emails that size their root element (0.75.2).
+- Not yet tested in Thunderbird: the popup's "Note on this email" always editing (0.75.1), picture notes (0.76.0), notes in the empty space beside the content (0.76.1), quick actions (0.29.0), "Delete for good" in the popup (0.30.0), sub-tasks (0.38.0), and the 0.48.x changes (editing while sync runs, list rendering, the Message-ID notice). Thunderbird 153 ESR, with sync between two physical computers on the same IMAP accounts, was tested by the owner on macOS on 2026-10-18 and works (#24); Windows and Linux aren't tested yet.
 
 ## Next steps
 - Open work is in the dev repo's GitHub issues and in `BACKLOG.md`.

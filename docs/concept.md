@@ -68,7 +68,7 @@ Without the helper there is no history of earlier note versions. What can be und
 | Job | Why an Experiment | Decision |
 | --- | --- | --- |
 | Keep the carrier folder out of global search | The per-folder "include in global search" option has no API | D19 |
-| ThunderNotes column in the message list | No column API; uses Thunderbird's `ThreadPaneColumns` | D26 |
+| ThunderNotes column in the message list, and the post-it on cards | No column API; uses Thunderbird's `ThreadPaneColumns`; cards show no custom columns | D26 |
 | Tick "check this folder for new messages" and fetch the folder | No API fetches a folder from the server | D27 |
 | Expunge the carrier folder | Removes replaced revisions from the server promptly | D7, D27 |
 | Read the computer's name for the device name | No API exposes it | D32 |
@@ -90,6 +90,8 @@ An email is identified by its Message-ID (D2), and each highlight is anchored by
 - Links to emails will use `mid:` URIs (RFC 2392).
 
 **Selectors.** Each highlight stores a `TextQuoteSelector` (the exact text plus about 32 characters of prefix and suffix) and a `TextPositionSelector` (start and end offsets), both on normalised text: whitespace and block boundaries become one space; `>` quote markers at line start, soft hyphens and zero-width characters are dropped; invisible elements are skipped; bracketed URLs like `<https://…>` are dropped because Plain view prints links that way. Anchoring against the raw MIME source was rejected: the highlight must be found in the displayed text anyway.
+
+**Pictures** (D46). A whole picture can be highlighted or get a note (right-click it). It stores an `ImageSelector` of ThunderNotes' own: the picture's address (for an attached picture only its MIME part, `part:1.2`, as the shown address names this computer's folder), its place among the email's pictures, its alt text and the text just before and after it. It is found by its address; several pictures with that address are told apart by the text around them, then by place; with a changed address, by the same text on both sides; otherwise it is an orphan. It is framed in its colour by an outline, which doesn't move the layout.
 
 **Matching order** (spike `spikes/highlight-anchor`, across Original, Simple and Plain views):
 
@@ -119,7 +121,7 @@ A highlight is a note with empty text (D24): you select and pick a colour, and c
 **Margin cards (D23)**
 
 - Each card sits at the height of its highlight; overlapping cards are pushed apart and the active card stays level with its text. Cards of highlights on the same line follow the text order.
-- While an email has notes it is narrowed to make room (30 % of the pane, 200–320 px); emails without notes keep their full width. Fixed-width emails wider than the space left get the column after their content.
+- While an email has notes it is narrowed to make room (30 % of the pane, 200–320 px); emails without notes keep their full width. Fixed-width emails wider than the space left get the column after their content. With empty space beside the content (a centred newsletter column, short lines), the notes go there and the email is narrowed only as far as still needed (setting, on by default; D23, 0.76.1).
 - A toggle hides the column; the width can be dragged at a card's left edge (180 px to 60 % of the pane, remembered; double-click returns to automatic).
 - Hovering a highlight or card emphasises the other. A card opened from its highlight or the toolbar list is scrolled into view.
 - Order in the margin: whole-email note, then notes whose passage can't be found (with their warning line), then the anchored cards.
@@ -145,7 +147,7 @@ A highlight is a note with empty text (D24): you select and pick a colour, and c
 - "Restore N deleted in the last 30 days", set apart below a line in the accent colour (D33);
 - a red line when sync has a problem, which opens an explanation (D35); unreadable carriers listed by subject, each with "Delete from the server".
 
-**In the message list.** Annotated emails carry the `$annotated` keyword, shown as a Thunderbird tag: set with the first note, removed with the last, stale tags cleaned up when an email is shown, and "Update ThunderNotes tags" per folder in the folder pane. A sortable ThunderNotes column shows a post-it on those emails; it reads only the keyword, never the note store (D26). Carrier messages opened in Thunderbird show a dismissable cover saying they are internal to ThunderNotes, with no highlight UI (D27).
+**In the message list.** Annotated emails carry the `$annotated` keyword, shown as a Thunderbird tag: set with the first note, removed with the last, stale tags cleaned up when an email is shown, and "Update ThunderNotes tags" per folder in the folder pane. A sortable ThunderNotes column shows a post-it on those emails, and in the cards view the post-it sits among each card's icons, with one line of the whole-email note, right-aligned against the date or the icons, where the card has room (setting, on by default); the column and the post-it read only the keyword, the previews come from the add-on, never from the note store (D26). Carrier messages opened in Thunderbird show a dismissable cover saying they are internal to ThunderNotes, with no highlight UI (D27).
 
 **Safety nets**
 
@@ -248,6 +250,7 @@ We agreed **3 months** in the call. Push back.
 | `message_id`, `subject`, `from`, `date`, `folder_hint` | The email reference; only `message_id` is a key, the rest make the file readable | D2, D25 |
 | `created`, `updated`, `rev` | Set timestamps and revision number | D25 |
 | `annotations[]`: `id`, `quote`, `prefix`, `suffix`, `position`, `created`, `updated` | Anchoring selectors and timestamps per highlight; authoritative for anchoring | D25 |
+| `annotations[].image`: `src`, `index`, `alt`, `prefix`, `suffix` | A note on a picture instead of text (`quote` then empty) | D46 |
 | `colour`, `tags` | Colour by name; tags reserved for later | D29 |
 | `text_updated`, `colour_updated` | Own timestamps for text and colour (missing = `updated`) | D32 |
 | `text_by`, `text_base`, `text_bases` | Device that last changed the text; hash8 of the synced texts its writer remembers, newest first (in carriers; `text_base` is the first) | D32, D45 |
@@ -485,13 +488,13 @@ Phases 0, 2 and 4 are done, and most of phase 5 (0.75.0): local annotations, IMA
 
 ## Decisions
 
-The binding decisions in one line each, as of D45; `docs/DECISIONS.md` has the full text, dates and rejected options.
+The binding decisions in one line each, as of D47; `docs/DECISIONS.md` has the full text, dates and rejected options.
 
 | Question | Decision | D |
 | --- | --- | --- |
 | Platform | Thunderbird MailExtension; one minimal Experiment where no API exists; optional native helper | D1, D14, D19 |
 | Email identity | Message-ID (none: not annotated; no fallback planned); `mid:` URIs for links | D2 |
-| Anchoring | W3C TextQuote + TextPosition on the visible text of the current view; fuzzy match required; partial anchors; orphans never dropped, shown at the top with a warning | D3, D21, D23 |
+| Anchoring | W3C TextQuote + TextPosition on the visible text of the current view (pictures: address, place and surrounding text, D46); fuzzy match required; partial anchors; orphans never dropped, shown at the top with a warning | D3, D21, D23 |
 | Note file granularity | One annotation set, file and carrier per email (threads change) | D4 |
 | File format | Markdown per email; all machine data in YAML front matter; notes in `## “quote” <!-- tn:id -->` sections; same for export, carrier and Git folder; export adds `settings.json` | D5, D25 |
 | Local versioning | Markdown folder is a Git repository, auto-committed by the helper (later; history only, merging is D32/D33) | D6 |
@@ -512,7 +515,7 @@ The binding decisions in one line each, as of D45; `docs/DECISIONS.md` has the f
 | Note rendering | In the background (markdown-it subset + DOMPurify); display script stays small | D22 |
 | Note cards | Word-style right margin aligned with highlights; email narrows, never covered; toggle and drag width; optional lines to the highlights; printing with notes | D23 |
 | Highlight vs note | One concept: a highlight is a note with empty text; click to edit, leave to save, Esc discards | D24 |
-| Message-list column | ThunderNotes icon column via the Experiment, reading only the `$annotated` keyword | D26 |
+| Message-list column | ThunderNotes icon column via the Experiment (and the post-it on cards), reading only the `$annotated` keyword | D26 |
 | Note editor | CodeMirror 6 live preview, loaded on demand; lists, Tab, numbered sub-lists from any number, renumbering, link shortcuts; textarea fallback | D28 |
 | Colours | 8 named colours stored by name; white text on orange, red, purple, grey, else WCAG; whole-email note recolourable; last colour reused | D29 |
 | Folding cards | Fold to the quote line; per device, optionally synced in a separate `folded` map | D30 |
@@ -531,3 +534,5 @@ The binding decisions in one line each, as of D45; `docs/DECISIONS.md` has the f
 | Deleted emails | Emails in the Trash or deleted for good are left alone: no tasks, suggestions or backlinks; notes kept | D43 |
 | Emails not found | Notes whose email can't be found are marked and listed in the settings, deletable | D44 |
 | Sync and merge rules | Normative specification `docs/SYNC.md` with scenario tests: bases, merge order, cleanup, editing while sync runs | D45 |
+| Pictures | Whole pictures highlighted or noted from the right-click menu; framed by an outline; found by address, place and surrounding text; optional `image` field in format 2 | D46 |
+| Settings page | In a tab of its own, not inside the Add-ons Manager; right-click shows only "Copy" with text selected | D47 |

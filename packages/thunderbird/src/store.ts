@@ -67,16 +67,16 @@ export async function getSet(accountId: string | undefined, messageId: string): 
   return (await run<AnnotationSet | undefined>("readonly", (s) => s.get(setKey(accountId, messageId)))) ?? null;
 }
 
-let onChange: (() => void) | null = null;
+const onChange = new Set<() => void>();
 
-/** Called after every write in this page (the background: the Tasks button's count, D38). */
+/** Called after every write in this page (the background: the Tasks button's count, D38; the cards' previews, D26). */
 export function onSetsChanged(listener: () => void): void {
-  onChange = listener;
+  onChange.add(listener);
 }
 
 /** Tells the add-on's other pages (the task view, D38) that notes changed. */
 function changed(): void {
-  onChange?.();
+  for (const listener of onChange) listener();
   if (typeof messenger === "undefined") return; // tests
   messenger.runtime.sendMessage({ type: "setsChanged" }).catch(() => {}); // no page open
 }

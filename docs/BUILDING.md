@@ -54,7 +54,7 @@ Only release versions from npm, unmodified, declared with exact versions and res
 
 `experiments/thundernotes/` does what no WebExtension API offers (each checked against the
 Thunderbird MV3 API reference): keep the add-on's IMAP folder subscribed, out of global search and
-checked for new mail, expunge it after removing old messages, add a message-list column, add
+checked for new mail, expunge it after removing old messages, add a message-list column (and its icon and a note preview on the cards view's cards), add
 "Print with Notes" to Thunderbird's print menus, move the keyboard focus into the message pane or
 a tab, and read the computer's name for the default device name.
 

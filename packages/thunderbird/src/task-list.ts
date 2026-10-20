@@ -5,7 +5,7 @@
 // The task view's list (D38): every checklist item in all notes, grouped by due date. Kept
 // apart from the page so it can be tested without a browser.
 
-import { codeLines, formatDue, isValidDate, isoDate, preferredSpellings, senderName, tasksIn, type AnnotationSet, type TaskItem, type TextQuoteSelector } from "@thundernotes/core";
+import { codeLines, formatDue, isValidDate, isoDate, preferredSpellings, senderName, quoteLabel, tasksIn, type AnnotationSet, type TaskItem } from "@thundernotes/core";
 import { EMAIL_NOTE_ID } from "./protocol.js";
 import { matchesFilter, parseFilter } from "./filter-expr.js";
 
@@ -67,7 +67,7 @@ export function collectTasks(sets: AnnotationSet[]): TaskEntry[] {
       ...set.annotations.map((a) => ({
         noteId: a.id,
         md: a.bodyMd,
-        quote: a.selectors.find((s): s is TextQuoteSelector => s.type === "TextQuoteSelector")?.exact,
+        quote: quoteLabel(a),
       })),
     ];
     for (const note of notes) {

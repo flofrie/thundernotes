@@ -101,6 +101,7 @@ declare namespace tb {
     /** Our Experiment API (experiments/thundernotes, D19, D26). */
     thundernotes: {
       refreshColumn(): Promise<void>;
+      setCardPreviews(previews: Record<string, { text: string; background: string; color: string; border: string }>): Promise<void>;
       getGlobalSearch(folderId: string): Promise<boolean>;
       setGlobalSearch(folderId: string, include: boolean): Promise<boolean>;
       prepareCarrierFolder(folderId: string): Promise<void>;

@@ -20,7 +20,8 @@ import {
   rgba,
   textOn,
   type Annotation,
-  type TextQuoteSelector,
+  imageSelectorOf,
+  quoteLabel,
   taskAtLine,
 } from "@thundernotes/core";
 import { EDIT_MENU_CSS, MOD, attachEditMenu, colourItem, labelColourItems, openMenu, type Clipboard, type MenuItem } from "./edit-menu.js";
@@ -333,19 +334,19 @@ export class NoteCard {
     this.preview = $(".preview");
     this.liveHost = $(".live");
     this.editBox = $(".edit");
-    const quote = annotation.selectors.find((s): s is TextQuoteSelector => s.type === "TextQuoteSelector");
-    // No quote: the note on the whole email.
-    $(".quote").textContent = quote ? `“${quote.exact}”` : "Note on this email";
+    // No quote: the note on the whole email. A picture's (D46) shows as "🖼 …", not in quotation marks.
+    const quote = quoteLabel(annotation);
+    $(".quote").textContent = quote === undefined ? "Note on this email" : imageSelectorOf(annotation) ? quote : `“${quote}”`;
     const badge = document.createElement("span");
     badge.className = "conflict-badge";
     badge.textContent = "2 versions";
     badge.title = "Changed on two devices at once: keep one version in the note";
     $(".quote").prepend(badge);
-    $(".quote").classList.toggle("email", !quote);
-    this.el.classList.toggle("email", !quote);
+    $(".quote").classList.toggle("email", quote === undefined);
+    this.el.classList.toggle("email", quote === undefined);
     this.colourSlot = $(".colour-slot");
     this.applyColour();
-    if (!quote) $(".bin").title = "Delete note";
+    if (quote === undefined) $(".bin").title = "Delete note";
 
     // Clicked while editing: save, leave the editor and fold. Noted on mousedown, because
     // a click on the quote line blurs (= saves and closes) the editor before the click arrives.

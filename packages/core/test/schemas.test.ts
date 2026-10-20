@@ -45,6 +45,13 @@ describe("format 2 front-matter schema", () => {
     expect(validateFront(front(toMarkdown(set))), JSON.stringify(validateFront.errors)).toBe(true);
   });
 
+  it("validates a note on a picture (D46), and rejects a picture without its place", () => {
+    const base = fromMarkdown(readFileSync(new URL("basic.md", fixtures), "utf8"));
+    const picture = { ...base.annotations[0]!, id: "picture", selectors: [{ type: "ImageSelector" as const, src: "part:1.2", index: 0, alt: "Logo", prefix: "a", suffix: "b" }] };
+    expect(validateFront(front(toMarkdown({ ...base, annotations: [picture] }))), JSON.stringify(validateFront.errors)).toBe(true);
+    expect(validateFront({ thundernotes: 2, message_id: "a@b", body_boundary: 0, annotations: [{ id: "a", quote: "", image: { src: "x" } }] })).toBe(false);
+  });
+
   it("allows documented minimal files and unknown extension fields", () => {
     expect(validateFront({ thundernotes: 2, message_id: "a@b", body_boundary: 0, future: true, annotations: [{ id: "a", quote: "", future: true }] })).toBe(true);
   });
