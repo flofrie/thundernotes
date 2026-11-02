@@ -5,7 +5,7 @@
 // @vitest-environment jsdom
 
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { AnnotationSet } from "@thundernotes/core";
 
 const note: AnnotationSet = {
@@ -19,6 +19,11 @@ const note: AnnotationSet = {
 };
 
 vi.mock("../src/store.js", () => ({ getAllSets: async () => [note] }));
+
+// Leaving the filter box starts a 150 ms timer in the page (tasks.ts). Ended before the test
+// environment goes: on a slow machine (CI) one fired after it, without `document`, and vitest
+// counted that as an error although every test passed.
+afterAll(() => new Promise((done) => setTimeout(done, 300)));
 
 describe("task view page (D38)", () => {
   it("shows the tasks, filters by label, ticks one and opens its email", async () => {

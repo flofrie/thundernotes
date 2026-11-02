@@ -28,6 +28,7 @@ import {
 import { COLOUR_NAMES, DEFAULT_COLOUR, colourOf, darker, hasConflict, labelColourCss, restorable, rgba, setAlwaysShowYear, textOn, type LabelColours } from "@thundernotes/core";
 import { CARD_CSS, type Draft } from "./card.js";
 import { openForEditing } from "./focus-edit.js";
+import { keepTypingInside } from "./keep-typing.js";
 import { cardMiddle, lineBands, passageMiddle } from "./connectors.js";
 import { MOD, SWATCH_CSS, colourItem, openMenu, swatch, type MenuItem } from "./edit-menu.js";
 import { EMAIL_NOTE_ID, MARGIN_CSS, Margin, emailNoteAnnotation, type CardBox, type CardStatus } from "./margin.js";
@@ -219,6 +220,8 @@ const host = document.createElement("div");
 host.className = "thundernotes-host"; // left out of printing (content.css), unless printed with notes
 host.style.cssText = "position:absolute;top:0;left:0;width:0;height:0;z-index:2147483647;";
 const shadow = host.attachShadow({ mode: "closed" });
+// Keys typed in our fields stay ours, not shortcuts of other add-ons (public issue #8).
+keepTypingInside(shadow);
 shadow.innerHTML = `
   <style>
     .float { position: absolute; z-index: 20; display: none; font: 13px system-ui, sans-serif; } /* above the note cards */

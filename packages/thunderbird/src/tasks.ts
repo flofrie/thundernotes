@@ -2027,6 +2027,9 @@ messenger.runtime.onMessage.addListener((message: { type?: string }) => {
   }
   return undefined;
 });
+// The notes overview (D48).
+$("toNotes").addEventListener("click", () => void messenger.runtime.sendMessage({ type: "openNotes" }));
+
 // Opened or brought to the front: the keyboard focus into the page, so the arrow keys work at
 // once (else it stays in Thunderbird's toolbar or tab bar). Not when a field has it already.
 function takeFocus(): void {

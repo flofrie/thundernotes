@@ -46,7 +46,7 @@ To be converted into GitHub issues and milestones.
 ## Phase 3 — Live files + Notes space
 - [ ] Helper: two-way folder sync with file watching
 - [ ] Helper: Git repo init + debounced auto-commit
-- [ ] Notes space tab with full-text search (MiniSearch/FlexSearch)
+- [x] Notes space tab: built without the helper as the notes overview (0.79.0, D48)
 
 ## Phase 4 — IMAP sync
 - [x] Carrier message writer/reader (core/carrier.ts)
@@ -74,6 +74,10 @@ To be converted into GitHub issues and milestones.
 - [x] Label colours, synced in a settings carrier (D40, 0.25.0)
 - [x] Label order: most used, A–Z, Z–A or own (dragged), synced (D40, 0.28.0)
 - [ ] Saved views in the task view (filter, grouping, order), if switching contexts is missed
+- [x] (D41) Two packages per release: `-atn.xpi` with the highest tested Thunderbird for addons.thunderbird.net, `.xpi` without it for GitHub releases (installs on newer versions too).
+- [x] (0.80.0, D49) Tetris as an experiment: a standard game with the pieces as post-its. 0.80.1: an Easter egg, no menu entry: poke the settings' post-it five times while it's angry and it bursts into blocks, opening the game.
+- [x] (0.80.2, public issue #8) Typing in notes with tbkeys: keys typed in our fields and the note editor stop at our Shadow DOM, so add-ons catching single keys on the Thunderbird window (tbkeys' `unset`) no longer swallow them.
+- [x] (0.79.0, D48) Notes overview with full-text search: a tab listing every note, newest change first; search over notes, passages, subjects and senders with the task view's expressions; colour, account and plain-highlight filters; opens the note on its email. In the spaces bar, the toolbar button's right-click menu and the popup. 0.80.3: right-click as on the settings page (no browser menu; Copy with text selected); the scrollbar's room always kept, here and in the task view, so the page doesn't shift when a filter leaves few entries.
 - [x] Task view quick actions: due date (today, tomorrow, in a week, typed date word), remove date, add/remove label; with undo (0.29.0)
 - [ ] Report to Thunderbird (bugzilla.mozilla.org, product Thunderbird): right-click on an email in the message list that isn't the shown one, choose "Print…": it prints the shown email, not the right-clicked one (other right-click actions use the right-clicked email via `mailContextMenu.setOverrideSelection`; cmd_print apparently doesn't). Then reconsider "Print with Notes" for such emails (show the email first, then print), see D23; for now they are hidden there.
 - [x] Options page restructured (0.39.0): cards by area (highlights, writing notes, keyboard shortcuts, dates, task view, lines and printing, sync and devices, backup, developer), switches, live examples for highlights and dates, sync status per account with "Sync now". Later, when reminders add settings: a section list on the left, a search field.
@@ -82,7 +86,7 @@ To be converted into GitHub issues and milestones.
 - [ ] When a third display setting shared by several parts comes up: one "apply display settings" function each part calls (now wired separately: hide current year, past due dates red)
 - [ ] Notion two-way sync
 
-- [x] (0.76.2) Settings page: the header's post-it in 3D (plain WebGL, no library): thickness, folded corner, light; sways, leans towards the pointer, blinks, flips on a click, and a right-click pokes it (0.76.3: briefly angry, red and frowning, instead of the page's long menu; 0.76.4: the anger grows and fades gradually, the menu blocked more firmly; 0.77.1: turns as far left and up as right and down, lit from the front); still with "reduce motion", the flat icon without WebGL.
+- [x] (0.76.2) Settings page: the header's post-it in 3D (plain WebGL, no library): thickness, folded corner, light; sways, leans towards the pointer, blinks, flips on a click, and a right-click pokes it (0.76.3: briefly angry, red and frowning, instead of the page's long menu; 0.76.4: the anger grows and fades gradually, the menu blocked more firmly; 0.77.1: turns as far left and up as right and down, lit from the front; 0.79.1: a double-click makes it envious: green, a sideways glance under lowered lids, a crooked mouth, its head turned away; a click waits 0.3 s to tell); still with "reduce motion", the flat icon without WebGL.
 - [x] (0.78.0, D26) A one-line preview of the whole-email note on cards (3 rows: the last line; 2 rows: between sender and date), full text on hover; setting, on by default. 0.78.3: a lozenge in the note's colour, ending in "…" when longer; 0.78.5: right-aligned, against the date (2 rows) or the icons (3 rows), never widening the list; 0.78.7: the subject's text size; 0.78.8: up to 75 % of the line's free room, measured.
 - [x] (0.77.2, D26) The post-it on the message list's cards view too (cards show no custom columns): the Experiment adds it among each card's icons for emails with notes (0.77.3: read from the card's own tags, as the message list's values can be hidden from the Experiment).
 - [x] (0.77.0, D47) Settings in a tab of their own: no frame in the Add-ons Manager (its browser menu and a sticking wheel came with it); right-click shows no menu, or only "Copy" with text selected. (0.76.4 had worked around the wheel inside the frame.)

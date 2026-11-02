@@ -11,9 +11,11 @@ source code submission and vendoring (https://webextension-api.thunderbird.net/e
 1. **Account:** sign in at https://addons.thunderbird.net (Developer Hub → Submit a New Add-on), with
    two-factor authentication.
 2. **Build:** `npm ci && npm run package` on a clean `main`. It writes
-   `build/thundernotes-<version>.xpi` and `build/thundernotes-<version>-source.zip` and prints the
-   `.xpi`'s sha256; CI prints the same checksum (it's reproducible).
-3. **Upload** the `.xpi`. Choose "On this site" (listed). Platforms: all.
+   `build/thundernotes-<version>-atn.xpi`, `build/thundernotes-<version>.xpi` and
+   `build/thundernotes-<version>-source.zip` and prints the `.xpi` files' sha256; CI prints the
+   same checksums (it's reproducible).
+3. **Upload** the **`-atn.xpi`**: it has the highest Thunderbird version ATN requires (the other,
+   for GitHub releases, has none, D41). Choose "On this site" (listed). Platforms: all.
 4. **Source code:** answer "Yes" to "Do you need to submit source code?" and upload the
    `-source.zip`. Its `README.md` is the build instructions for the reviewers.
 5. **Listing:** paste the texts from section 2, add screenshots (section 3), set the licence to

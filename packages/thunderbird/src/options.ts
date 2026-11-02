@@ -252,7 +252,8 @@ showLastExport();
 
 // The header's post-it in 3D (a small extra; the flat icon stays without WebGL).
 const headerIcon = document.querySelector<HTMLElement>("h1 img");
-if (headerIcon) mountNote3d(headerIcon);
+// Poked into bursting, it opens the hidden Tetris (an Easter egg, D49).
+if (headerIcon) mountNote3d(headerIcon, 64, () => void messenger.runtime.sendMessage({ type: "openTetris" }).catch(() => {}));
 
 // Settings: checkbox id = storage key; `on` = the default when never set.
 const SETTINGS: { key: string; on: boolean }[] = [

@@ -7,7 +7,7 @@ Requirements: Node.js 22 or newer with npm (developed with Node 26, npm 11), mac
 ```sh
 npm ci                 # exact dependency versions from package-lock.json
 npm test               # unit tests (core and the Thunderbird add-on)
-npm run package        # builds everything, then writes build/thundernotes-<version>.xpi
+npm run package        # builds everything, then writes build/thundernotes-<version>-atn.xpi and -<version>.xpi
 ```
 
 The `.xpi` contains `manifest.json`, the HTML pages and `content.css`, `icons/`, the Experiment
@@ -36,7 +36,10 @@ default device name. See `docs/DECISIONS.md` (D19, D20, D23, D26, D36).
 3. **Committed.** Everything is committed: `npm run package` refuses otherwise, as the source zip
    must match the add-on.
 4. **Package.** `npm run package` writes to `build/`:
-   - `thundernotes-<version>.xpi`, the add-on;
+   - `thundernotes-<version>-atn.xpi`, the add-on for addons.thunderbird.net, up to the
+     manifest's `strict_max_version`;
+   - `thundernotes-<version>.xpi`, the same without `strict_max_version`, for GitHub releases: it
+     installs on newer, untested Thunderbird versions too (D41);
    - `thundernotes-<version>-source.zip`, the committed sources, for the review.
    It checks that every file the manifest and the pages refer to is in the package.
 5. **Install test in a clean profile.** `thunderbird -P` → a new profile (not `Development`) →
@@ -51,7 +54,7 @@ default device name. See `docs/DECISIONS.md` (D19, D20, D23, D26, D36).
 6. **Release notes.** What changed since the last published version, in plain words.
 7. **Publish.**
    - addons.thunderbird.net: follow `docs/ATN-SUBMISSION.md` (steps, listing texts, privacy
-     policy, notes to reviewers). Upload the `.xpi` and the source zip; the source zip's README is
+     policy, notes to reviewers). Upload the `-atn.xpi` and the source zip; the source zip's README is
      `docs/BUILDING.md` with the versions and the `.xpi`'s checksum filled in. The `.xpi` is
      reproducible: CI prints the same checksum as `npm run package`. The Experiment and the bundled
      scripts are reviewed by people, so allow time.
@@ -62,7 +65,7 @@ default device name. See `docs/DECISIONS.md` (D19, D20, D23, D26, D36).
    with `--push` it publishes. The public repository `flofrie/thundernotes` gets one commit per
    release ("ThunderNotes <version>"), made from the private repository's current commit without
    `spikes/` (the private history stays private), tagged `v<version>`, and a GitHub
-   release with the `.xpi` from step 4.
+   release with the `.xpi` from step 4 (the one without `strict_max_version`).
 
 ## Tested-version register
 

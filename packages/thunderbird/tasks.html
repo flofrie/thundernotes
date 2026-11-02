@@ -16,11 +16,15 @@
               --accent: #8ab4f8; --accent-bg: #1f2b3d; --red: #ff8787; --chip: #ffffff14; --chip-border: #ffffff2e;
               --badge-fg: #8a8a8a; --badge-bg: #ffffff09; --badge-border: #ffffff17; --hover-strong: #ffffff1c; }
     }
+    /* Room for the scrollbar always kept: the page doesn't shift when a filter leaves few entries. */
+    html { scrollbar-gutter: stable; }
     body:focus { outline: none; }
     body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
     main { max-width: 860px; margin: 0 auto; padding: 20px 24px 60px; }
     header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 10px; }
     h1 { font-size: 20px; margin: 0; flex: 1 1 auto; }
+    #toNotes { font-size: 13px; color: var(--accent); cursor: pointer; text-decoration: none; }
+    #toNotes:hover { text-decoration: underline; }
     /* The filter: unused, a small lozenge with a funnel (the filter symbol, as on a spreadsheet
        column); clicked or Cmd/Ctrl+F, the field opens in it; tinted while it filters. */
     .search { position: relative; display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px 2px 8px; font-size: 12.5px; color: var(--muted);
@@ -221,6 +225,7 @@
   <main>
     <header>
       <h1>Tasks</h1>
+      <a id="toNotes" title="Every note of every email, newest first, with search">Notes →</a>
     </header>
     <!-- Stays at the top while the tasks scroll (setting); the title scrolls away. -->
     <div id="top">

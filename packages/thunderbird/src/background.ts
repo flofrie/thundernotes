@@ -59,6 +59,7 @@ const MENU_COLOUR = "thundernotes-colour";
 const MENU_COPY_LINK = "thundernotes-copy-link";
 const MENU_NOTE = "thundernotes-note";
 const MENU_COPY_ALL = "thundernotes-copy-all";
+const MENU_NOTES = "thundernotes-notes";
 const MENU_IMAGE = "thundernotes-image";
 const MENU_IMAGE_NOTE = "thundernotes-image-note";
 const colourMenuId = (name: string) => `${MENU_COLOUR}-${name}`;
@@ -140,6 +141,9 @@ async function createMenus(): Promise<void> {
   });
   // A link to the email for a note (D37): [Subject – Sender, date](mid:…), one per selected email.
   messenger.menus.create({ id: MENU_COPY_LINK, title: "Copy ThunderNotes link", contexts: ["message_list"] });
+  // The toolbar button opens the task view; its right-click menu the notes overview (D48): an
+  // add-on has only one main toolbar button.
+  messenger.menus.create({ id: MENU_NOTES, title: "All notes", contexts: ["action"] });
   // In the email (not on a highlight or a note: those have their own menus) and on the header button.
   messenger.menus.create({ id: MENU_COPY_ALL, title: "Copy all notes as Markdown", contexts: ["page", "link", "selection"], visible: false });
   messenger.menus.create({ id: `${MENU_COPY_ALL}-action`, title: "Copy all notes as Markdown", contexts: ["message_display_action"], visible: false });
@@ -223,6 +227,10 @@ messenger.menus.onClicked.addListener((info, tab) => {
   if ((info.menuItemId === MENU_COPY_ALL || info.menuItemId === `${MENU_COPY_ALL}-action`) && tab?.id !== undefined) {
     const message: ToContent = { type: "copyAllNotes" };
     messenger.tabs.sendMessage(tab.id, message).catch((e) => console.warn("ThunderNotes: copying notes failed", e));
+    return;
+  }
+  if (info.menuItemId === MENU_NOTES) {
+    void openNotes().catch((e) => console.error("ThunderNotes: opening the notes failed", e));
     return;
   }
   if (info.menuItemId === MENU_RETAG) {
@@ -679,6 +687,9 @@ type FromPages =
   | { type: "deleteUnreadable"; accountId: string; id: string }
   | { type: "openEmail"; accountId?: string; messageId: string; noteId?: string; line?: number }
   | { type: "openTasks" }
+  | { type: "openNotes" }
+  /** The settings' post-it, poked into bursting: the hidden Tetris (D49). */
+  | { type: "openTetris" }
   | { type: "setsChanged" }
   | { type: "setLabelColour"; label: string; colour: string | null; accountIds?: string[] }
   | { type: "setLabelOrder"; mode: LabelOrderMode; custom?: string[]; accountIds?: string[] }
@@ -706,6 +717,33 @@ async function openOptionsAt(section: string, key?: string): Promise<void> {
   } else {
     await messenger.runtime.openOptionsPage();
   }
+}
+
+/** Opens Tetris (D49), or brings it to the front if it is open already (it answers "tetrisTab"). */
+async function openTetris(): Promise<void> {
+  const open = await messenger.runtime.sendMessage<{ tabId: number; windowId: number } | undefined>({ type: "tetrisTab" }).catch(() => undefined);
+  if (open) {
+    await messenger.tabs.update(open.tabId, { active: true });
+    await messenger.windows.update(open.windowId, { focused: true });
+  } else {
+    await messenger.tabs.create({ url: "tetris.html" });
+  }
+  await messenger.thundernotes.focusCurrentTab().catch(() => false);
+}
+
+/** Opens the notes overview (D48), or brings it to the front if it is open already (it answers "notesTab"). */
+async function openNotes(): Promise<void> {
+  const open = await messenger.runtime.sendMessage<{ tabId: number; windowId: number } | undefined>({ type: "notesTab" }).catch(() => undefined);
+  if (open) {
+    await messenger.tabs.update(open.tabId, { active: true });
+    await messenger.windows.update(open.windowId, { focused: true });
+  } else {
+    // As the space's tab, so the menu, the links and the space button lead to the same tab.
+    const space = await notesSpace;
+    if (space !== null) await messenger.spaces.open(space);
+    else await messenger.tabs.create({ url: "notes.html" });
+  }
+  await messenger.thundernotes.focusCurrentTab().catch(() => false);
 }
 
 /** Opens the task view, or brings it to the front if it is open already (it answers "tasksTab"). */
@@ -819,6 +857,17 @@ const tasksSpace: Promise<number | null> = (async () => {
     return (await messenger.spaces.create(TASKS_SPACE, TASKS_URL, button)).id;
   } catch {
     return (await messenger.spaces.query({ name: TASKS_SPACE }).catch(() => []))[0]?.id ?? null;
+  }
+})();
+
+/** The notes overview as a space too (D48), beside the Tasks one. Null if Thunderbird refuses. */
+const NOTES_SPACE = "thundernotes_notes";
+const notesSpace: Promise<number | null> = (async () => {
+  const button: tb.SpaceButtonProperties = { title: "ThunderNotes Notes", defaultIcons: "icons/notes.svg" };
+  try {
+    return (await messenger.spaces.create(NOTES_SPACE, messenger.runtime.getURL("notes.html"), button)).id;
+  } catch {
+    return (await messenger.spaces.query({ name: NOTES_SPACE }).catch(() => []))[0]?.id ?? null;
   }
 })();
 
@@ -998,6 +1047,8 @@ messenger.runtime.onMessage.addListener((
 ) => {
   // From the task view (D38), and the popup's link to it.
   if (request?.type === "openTasks") return openTasks();
+  if (request?.type === "openNotes") return openNotes();
+  if (request?.type === "openTetris") return openTetris();
   // A label's colour (D40) from the task view, for the accounts it names (it is a tab too, without
   // an email: it must not go the way of the email requests below). From an email it does: that
   // email's account only (D42, dev issue #3).

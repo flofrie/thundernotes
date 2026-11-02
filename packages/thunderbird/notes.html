@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ThunderNotes Notes</title>
+  <link rel="icon" href="icons/notes.svg">
+  <style>
+    :root { color-scheme: light dark; --fg: #1f1f1f; --muted: #6b6b6b; --line: #00000014; --hover: #0000000a; --bg: #fff;
+            --accent: #0b57d0; --accent-bg: #e8f0fe; --red: #c92a2a; --chip: #0000000f; --chip-border: #00000024; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg: #e8e8e8; --muted: #a0a0a0; --line: #ffffff1c; --hover: #ffffff0d; --bg: #1c1b22;
+              --accent: #8ab4f8; --accent-bg: #1f2b3d; --red: #ff8787; --chip: #ffffff14; --chip-border: #ffffff2e; }
+    }
+    /* Room for the scrollbar always kept: the page doesn't shift when a filter leaves few entries. */
+    html { scrollbar-gutter: stable; }
+    body:focus { outline: none; }
+    body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+    main { max-width: 860px; margin: 0 auto; padding: 20px 24px 60px; }
+    header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+    h1 { font-size: 20px; margin: 0; }
+    #count { color: var(--muted); font-size: 13px; }
+    header a { margin-left: auto; font-size: 13px; color: var(--accent); cursor: pointer; text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+    #bar { position: sticky; top: 0; z-index: 2; background: var(--bg); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+           padding: 6px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+    #search { flex: 1 1 260px; font: inherit; color: var(--fg); background: transparent; padding: 5px 10px;
+              border: 1px solid var(--chip-border); border-radius: 1em; outline: none; }
+    #search:focus { border-color: var(--accent); }
+    #search.active { background: var(--accent-bg); border-color: var(--accent); }
+    #colours { display: inline-flex; gap: 5px; }
+    .colour { width: 16px; height: 16px; border-radius: 50%; padding: 0; cursor: pointer; border: 1px solid #0003; opacity: 0.45; }
+    .colour.on { opacity: 1; box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--accent); }
+    #colours.none .colour { opacity: 1; }
+    select { font: inherit; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--chip-border); border-radius: 6px; padding: 2px 4px; }
+    label.switch { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); cursor: pointer; }
+    ol { list-style: none; margin: 0; padding: 0; }
+    li.note { display: flex; gap: 10px; padding: 10px 8px; border-bottom: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+    li.note:hover { background: var(--hover); }
+    li.note .bar { flex: none; width: 4px; border-radius: 2px; }
+    li.note .body { flex: 1 1 auto; min-width: 0; }
+    .text { overflow-wrap: anywhere; }
+    .text > :first-child { margin-top: 0; }
+    .text > :last-child { margin-bottom: 0; }
+    .text a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+    .text pre { overflow-x: auto; }
+    /* As the task view shows a note (and the note cards): no gaps of their own around paragraphs
+       and lists, checklist items with their boxes, dates and labels as chips (D38). */
+    .text :is(p, ul, ol, li, blockquote, pre, h1, h2, h3, h4, h5, h6) { margin-top: 0; margin-bottom: 0; }
+    .text :is(h1, h2, h3, h4, h5, h6) { font-size: 1em; }
+    .text ul, .text ol { padding-left: 1.3em; list-style: revert; } .text li.task { list-style: none; margin-left: -1.3em; }
+    .text li > ul, .text li > ol { padding-left: 2.6em; }
+    .text .task-box { display: inline-block; box-sizing: border-box; width: 0.95em; height: 0.95em; border: 1.5px solid currentColor;
+                      border-radius: 3px; overflow: hidden; vertical-align: -0.18em; margin-right: 0.5em; opacity: 0.7; }
+    .text .tn-box-done { background: #2f9e44; border-color: #1e6e30; opacity: 1; }
+    .text .tn-box-done::before { content: "✓"; display: block; color: #fff; font: bold 0.7em/1.1 system-ui, sans-serif; text-align: center; }
+    .text blockquote { padding-left: 0.8em; border-left: 3px solid var(--chip-border); color: var(--muted); }
+    .tn-chip { background: var(--chip); border: 1px solid var(--chip-border); border-radius: 0.8em; padding: 0 0.45em; }
+    .tn-date { white-space: nowrap; }
+    .only-highlight { color: var(--muted); font-style: italic; }
+    .on, .email { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+    .on q { font-style: italic; }
+    .email .subject { color: var(--fg); }
+    .email .when { float: right; margin-left: 12px; }
+    .email .missing { color: var(--red); font-weight: 600; font-style: italic; }
+    mark.hit { background: #ffe066a6; color: inherit; border-radius: 2px; }
+    #empty { color: var(--muted); padding: 30px 0; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Notes</h1>
+      <span id="count"></span>
+      <a id="toTasks" title="Open the task view">Tasks →</a>
+    </header>
+    <div id="bar">
+      <input id="search" type="search" autocomplete="off" spellcheck="false"
+             placeholder="Search… (#label, &quot;phrase&quot;, -word)"
+             title="Words in the note, the passage it is on, the email's subject or sender. &quot;In quotes&quot; for a phrase, -word to leave out, or for either, (brackets) to group, /regex/ for a pattern. Cmd/Ctrl+F to get here, Esc to clear.">
+      <span id="colours" title="Only notes in these colours (none chosen: all)"></span>
+      <select id="account" title="Only the notes in this account" hidden></select>
+      <label class="switch" title="Also list highlights that have no note"><input type="checkbox" id="highlights"> Highlights without a note</label>
+    </div>
+    <ol id="list"></ol>
+    <div id="empty" hidden></div>
+  </main>
+  <script src="dist/notes.js"></script>
+</body>
+</html>

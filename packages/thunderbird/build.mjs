@@ -8,7 +8,7 @@
 import * as esbuild from "esbuild";
 
 const options = {
-  entryPoints: { background: "src/background.ts", content: "src/content.ts", options: "src/options.ts", popup: "src/popup.ts", result: "src/result.ts", tasks: "src/tasks.ts" },
+  entryPoints: { background: "src/background.ts", content: "src/content.ts", options: "src/options.ts", popup: "src/popup.ts", result: "src/result.ts", tasks: "src/tasks.ts", notes: "src/notes.ts", tetris: "src/tetris.ts" },
   bundle: true,
   outdir: "dist",
   format: "iife",

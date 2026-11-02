@@ -5,8 +5,13 @@
 // The settings page's header: the ThunderNotes post-it in 3D (plain WebGL, no library). A sheet
 // with some thickness and its corner folded over, lit from the upper left. It sways a little,
 // leans towards the mouse pointer, blinks now and then, and flips over when clicked. A right-click
-// pokes it instead of opening the page's menu: briefly angry (red, frowning, a jolt). Still with
-// "reduce motion" (the colour and the face change all the same); without WebGL the flat icon stays.
+// pokes it instead of opening the page's menu: briefly angry (red, frowning, a jolt). A
+// double-click makes it envious for a moment (green, a sideways glance, a crooked mouth).
+// Poked again and again while still angry, it cracks and bursts into little post-it blocks: the
+// way into the hidden Tetris (an Easter egg, D49). Still with "reduce motion" (the colour and the
+// face change all the same, no blocks fly); without WebGL the flat icon stays.
+
+import { colourOf, darker, rgba } from "@thundernotes/core";
 
 // ---- geometry ---------------------------------------------------------------------------------
 
@@ -140,34 +145,85 @@ function transform(rx: number, ry: number, rz: number, tx: number, ty: number, t
 
 // ---- the face ----------------------------------------------------------------------------------
 
-/** A poke's anger: growing for RISE_MS, held until HOLD_MS, gone by ANGRY_MS. */
-const RISE_MS = 450;
-const HOLD_MS = 1100;
-const ANGRY_MS = 1900;
+/** A mood's course: growing for `rise` ms, held until `hold`, gone by `end`. */
+interface Mood {
+  rise: number;
+  hold: number;
+  end: number;
+}
+/** A poke's anger. */
+const ANGER: Mood = { rise: 450, hold: 1100, end: 1900 };
+const RISE_MS = ANGER.rise;
+const ANGRY_MS = ANGER.end;
+/** A double-click's envy: a little slower, and longer (it sulks). */
+const ENVY: Mood = { rise: 600, hold: 2200, end: 3000 };
 
 /** Eased 0…1 (slow at both ends). */
 const ease = (x: number) => x * x * (3 - 2 * x);
 
-/** How angry the note is (0…1) `ms` after a poke: growing, held, then calming down, all eased. */
-export function angerAt(ms: number): number {
-  if (ms < 0 || ms >= ANGRY_MS) return 0;
-  if (ms < RISE_MS) return ease(ms / RISE_MS);
-  if (ms < HOLD_MS) return 1;
-  return 1 - ease((ms - HOLD_MS) / (ANGRY_MS - HOLD_MS));
+/** How strong a mood is (0…1) `ms` after it was set off: growing, held, then fading, all eased. */
+function moodAt(mood: Mood, ms: number): number {
+  if (ms < 0 || ms >= mood.end) return 0;
+  if (ms < mood.rise) return ease(ms / mood.rise);
+  if (ms < mood.hold) return 1;
+  return 1 - ease((ms - mood.hold) / (mood.end - mood.hold));
 }
 
+/** How angry the note is (0…1) `ms` after a poke. */
+export const angerAt = (ms: number) => moodAt(ANGER, ms);
+/** How envious the note is (0…1) `ms` after a double-click. */
+export const envyAt = (ms: number) => moodAt(ENVY, ms);
+
 /**
- * The poke time for a poke `since` ms after the last one, at `now`: from calm, now; while the
- * anger grows or holds, unchanged; while it fades, back into growing at the anger it has, so it
- * never jumps.
+ * When a mood set off again `since` ms after the last time, at `now`, counts as set off: from
+ * calm, now; while it grows or holds, unchanged; while it fades, back into growing at the
+ * strength it has, so it never jumps.
  */
-export function repoke(since: number, now: number): number {
-  if (since >= ANGRY_MS || since < 0) return now;
-  if (since < HOLD_MS) return now - since;
-  const anger = angerAt(since);
+function setOff(mood: Mood, since: number, now: number): number {
+  if (since >= mood.end || since < 0) return now;
+  if (since < mood.hold) return now - since;
+  const strength = moodAt(mood, since);
   let ms = 0;
-  while (ms < RISE_MS && angerAt(ms) < anger) ms += 5;
+  while (ms < mood.rise && moodAt(mood, ms) < strength) ms += 5;
   return now - ms;
+}
+
+/** A poke `since` ms after the last one (setOff for anger). */
+export const repoke = (since: number, now: number) => setOff(ANGER, since, now);
+/** A double-click `since` ms after the last one (setOff for envy). */
+export const reenvy = (since: number, now: number) => setOff(ENVY, since, now);
+
+/** How long a click waits for a second one before it flips the note (a double-click: envy). */
+export const DOUBLE_CLICK_MS = 300;
+
+/**
+ * Tells clicks from double-clicks: a click acts after `wait` ms unless a double-click came
+ * (which the browser sends after the two clicks it is made of): then only the double-click acts.
+ */
+export function sortClicks(
+  onClick: () => void,
+  onDouble: () => void,
+  wait = DOUBLE_CLICK_MS,
+  timers: { set: (f: () => void, ms: number) => unknown; clear: (handle: unknown) => void } = {
+    set: (f, ms) => setTimeout(f, ms),
+    clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  },
+): { click(): void; dblclick(): void } {
+  let pending: unknown;
+  return {
+    click() {
+      if (pending !== undefined) return; // the second click of a double-click
+      pending = timers.set(() => {
+        pending = undefined;
+        onClick();
+      }, wait);
+    },
+    dblclick() {
+      if (pending !== undefined) timers.clear(pending);
+      pending = undefined;
+      onDouble();
+    },
+  };
 }
 
 /** `a` to `b` by `t`, per colour channel ("#rrggbb"). */
@@ -176,19 +232,32 @@ function mix(a: string, b: string, t: number): string {
   return `rgb(${[0, 1, 2].map((i) => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t)).join(",")})`;
 }
 
-/** The sheet's colours, from yellow to angry red. */
+/** An "rgb(r,g,b)" (as mix gives) to "#rrggbb" `b` by `t`. */
+function mixRgb(a: string, b: string, t: number): string {
+  const [r, g, bl] = (a.match(/\d+/g) ?? ["0", "0", "0"]).map(Number);
+  const hex = `#${[r, g, bl].map((v) => v!.toString(16).padStart(2, "0")).join("")}`;
+  return mix(hex, b, t);
+}
+
+/** The sheet's colours, from yellow to angry red or envious green. */
 const YELLOW = "#ffd43b";
 const RED = "#ff5a4e";
+const GREEN = "#a6d66e";
+
+/** `a` to `b` by `t`. */
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 /**
  * The face as in icons/icon.svg (eyes, smile) on yellow; `open` 0…1 for blinking, `anger` 0…1:
- * the sheet turns red, the smile becomes a frown, the brows come down.
+ * the sheet turns red, the smile becomes a frown, the brows come down; `envy` 0…1: it turns
+ * green, the eyes glance sideways under lowered lids, the mouth goes small and crooked.
  */
-function drawFace(ctx: CanvasRenderingContext2D, size: number, open: number, anger = 0): void {
+function drawFace(ctx: CanvasRenderingContext2D, size: number, open: number, anger = 0, envy = 0, crack = 0): void {
   // The icon's sheet runs from 3.5 to 28.5: its coordinates scaled to the texture.
   const k = size / 25;
   const at = (v: number) => (v - 3.5) * k;
-  ctx.fillStyle = mix(YELLOW, RED, anger);
+  const sheet = mix(YELLOW, RED, anger);
+  ctx.fillStyle = envy ? mixRgb(sheet, GREEN, envy) : sheet;
   ctx.fillRect(0, 0, size, size);
   // A faint paper grain towards the top, where the sheet would come off the pad.
   const glow = ctx.createLinearGradient(0, 0, 0, size);
@@ -196,21 +265,39 @@ function drawFace(ctx: CanvasRenderingContext2D, size: number, open: number, ang
   glow.addColorStop(0.35, "#ffffff00");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, size, size);
-  const ink = mix("#5c4300", "#4a0d0a", anger);
+  const angry = mix("#5c4300", "#4a0d0a", anger);
+  const ink = envy ? mixRgb(angry, "#2d4a10", envy) : angry;
   ctx.fillStyle = ink;
+  // Envy: the eyes look aside (to the left, as the head turns away to the right) and narrow.
+  const aside = -1.3 * envy;
+  const height = Math.max(0.25, 2 * open * (1 - 0.45 * envy));
   for (const x of [11.5, 20.5]) {
     ctx.beginPath();
-    ctx.ellipse(at(x), at(12.5), 2 * k, Math.max(0.25, 2 * open) * k, 0, 0, 2 * Math.PI);
+    ctx.ellipse(at(x + aside), at(12.5 + 0.3 * envy), 2 * k, height * k, 0, 0, 2 * Math.PI);
     ctx.fill();
   }
   ctx.strokeStyle = ink;
-  ctx.lineWidth = 2.4 * k;
   ctx.lineCap = "round";
-  // The mouth: a smile (control point below the corners) turning into a frown (above them).
+  if (envy > 0.05) {
+    // Lowered lids: a flat line over each eye.
+    ctx.lineWidth = 1.3 * k;
+    ctx.globalAlpha = Math.min(1, envy * 1.5);
+    ctx.beginPath();
+    for (const x of [11.5, 20.5]) {
+      ctx.moveTo(at(x - 2.6), at(11.4));
+      ctx.lineTo(at(x + 2.6), at(11.0));
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  ctx.lineWidth = 2.4 * k;
+  // The mouth: a smile (control point below the corners) turning into a frown (above them);
+  // envious, a small crooked line pulled to one side.
   const corner = 17.5 + 2.5 * anger;
+  const control = 24 - 10.5 * anger;
   ctx.beginPath();
-  ctx.moveTo(at(9.5), at(corner));
-  ctx.quadraticCurveTo(at(16), at(24 - 10.5 * anger), at(22.5), at(corner));
+  ctx.moveTo(at(lerp(9.5, 12, envy)), at(lerp(corner, 19.3, envy)));
+  ctx.quadraticCurveTo(at(lerp(16, 16.5, envy)), at(lerp(control, 18.6, envy)), at(lerp(22.5, 19.8, envy)), at(lerp(corner, 17.8, envy)));
   ctx.stroke();
   if (anger > 0.05) {
     // Brows slanting down towards the middle.
@@ -224,6 +311,127 @@ function drawFace(ctx: CanvasRenderingContext2D, size: number, open: number, ang
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
+  if (crack > 0) {
+    // Cracks spreading from the middle as it is about to burst.
+    ctx.strokeStyle = "#3a0806";
+    ctx.lineWidth = 0.9 * k;
+    ctx.lineJoin = "round";
+    for (const line of CRACKS) {
+      ctx.beginPath();
+      const n = Math.max(2, Math.ceil(line.length * crack));
+      line.slice(0, n).forEach(([x, y], i) => (i ? ctx.lineTo(at(x), at(y)) : ctx.moveTo(at(x), at(y))));
+      ctx.stroke();
+    }
+  }
+}
+
+/** The cracks' zigzags, in the icon's coordinates, from the middle outwards. */
+const CRACKS: [number, number][][] = [
+  [[16, 15], [13.5, 13], [14.5, 10.5], [11, 8], [10, 4]],
+  [[16, 15], [18.5, 16.5], [21, 15], [24, 17.5], [28, 16]],
+  [[16, 15], [15, 18.5], [17, 21], [14.5, 24], [15.5, 28]],
+  [[16, 15], [19, 12], [21.5, 12.5], [23, 9], [26.5, 6]],
+  [[16, 15], [12, 16], [9, 19.5], [5.5, 19], [4, 22]],
+];
+
+/** How cracked the face is (0…1) at `now`, cracking since `from` over `ms`; 0 when it isn't cracking. */
+export function crackAt(now: number, from: number, ms: number): number {
+  if (!Number.isFinite(from)) return 0;
+  return Math.min(1, Math.max(0, (now - from) / ms));
+}
+
+/** Pokes in a row while still angry that make it burst (the Easter egg, D49). */
+export const BURST_POKES = 5;
+
+/** The pokes in a row after one more: counting on while it is still angry, from one when calm. */
+export function pokeStreak(streak: number, stillAngry: boolean): number {
+  return stillAngry ? streak + 1 : 1;
+}
+
+/** One block of the burst: where it starts (page px), how it flies (px/s), turns (rad/s), its colour. */
+export interface Shard {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  turn: number;
+  spin: number;
+  size: number;
+  colour: string;
+}
+
+/** The burst's blocks: a grid over the note (`rect`), flying out from its middle and up, in the pieces' colours. */
+export function burstShards(rect: { left: number; top: number; width: number; height: number }, random: () => number = Math.random): Shard[] {
+  const colours = ["blue", "yellow", "purple", "green", "red", "pink", "orange"] as const;
+  const per = 6;
+  const size = Math.max(6, Math.round(rect.width / per));
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const out: Shard[] = [];
+  for (let i = 0; i < per; i++)
+    for (let j = 0; j < per; j++) {
+      const x = rect.left + (i + 0.5) * (rect.width / per);
+      const y = rect.top + (j + 0.5) * (rect.height / per);
+      const speed = 260 + random() * 420;
+      const angle = Math.atan2(y - cy, x - cx) + (random() - 0.5) * 0.9;
+      // Out from the middle, and all pop up first (the downward push weakened), then fall.
+      out.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed * 0.6 - 420 - random() * 260, turn: random() * Math.PI, spin: (random() - 0.5) * 14, size, colour: colours[Math.floor(random() * colours.length)]! });
+    }
+  return out;
+}
+
+/** How long the blocks fly before they are gone. */
+const BURST_MS = 1400;
+
+/** The blocks flying over the page from where the note was, then `done`. */
+function burst(rect: DOMRect, done: () => void): void {
+  const fly = document.createElement("canvas");
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  fly.width = window.innerWidth * dpr;
+  fly.height = window.innerHeight * dpr;
+  fly.style.cssText = "position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;";
+  document.body.append(fly);
+  const ctx = fly.getContext("2d");
+  if (!ctx) return (fly.remove(), done());
+  ctx.scale(dpr, dpr);
+  const shards = burstShards(rect);
+  const start = performance.now();
+  let last = start;
+  const step = (now: number) => {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const age = now - start;
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    ctx.globalAlpha = age > BURST_MS - 400 ? Math.max(0, (BURST_MS - age) / 400) : 1;
+    for (const s of shards) {
+      s.vy += 1900 * dt; // gravity
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.turn += s.spin * dt;
+      const colour = colourOf(s.colour);
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.turn);
+      const h = s.size / 2;
+      // A little post-it: its corner folded.
+      ctx.beginPath();
+      ctx.moveTo(-h, -h);
+      ctx.lineTo(h, -h);
+      ctx.lineTo(h, h * 0.4);
+      ctx.lineTo(h * 0.4, h);
+      ctx.lineTo(-h, h);
+      ctx.closePath();
+      ctx.fillStyle = rgba(colour, 1);
+      ctx.fill();
+      ctx.strokeStyle = darker(colour);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (age < BURST_MS) requestAnimationFrame(step);
+    else (fly.remove(), done());
+  };
+  requestAnimationFrame(step);
 }
 
 // ---- rendering ---------------------------------------------------------------------------------
@@ -247,7 +455,7 @@ const VERTEX = `
 
 const FRAGMENT = `
   precision mediump float;
-  uniform sampler2D face; uniform float shadowAlpha; uniform float anger;
+  uniform sampler2D face; uniform float shadowAlpha; uniform float anger; uniform float envy;
   varying vec3 vNormal; varying vec2 vUv; varying float vMaterial; varying vec3 vView;
   void main() {
     if (vMaterial > 3.5) {
@@ -263,6 +471,7 @@ const FRAGMENT = `
               : vMaterial < 2.5 ? vec3(1.0, 0.80, 0.16)
               : vec3(0.88, 0.69, 0.14);
     if (vMaterial > 0.5) base = mix(base, base * vec3(1.0, 0.42, 0.36) + vec3(0.06, 0.0, 0.0), anger);
+    if (vMaterial > 0.5) base = mix(base, base * vec3(0.66, 1.0, 0.58) + vec3(0.0, 0.03, 0.0), envy);
     // From the front, a little above: turned left or right it looks alike.
     vec3 light = normalize(vec3(0.0, 0.45, 1.0));
     float diffuse = max(dot(n, light), 0.0);
@@ -302,9 +511,10 @@ const FLIP_MS = 900;
 
 /**
  * Puts the 3D note in place of `img` (the flat icon), `size` CSS pixels square. Returns false,
- * leaving the icon, where WebGL isn't available.
+ * leaving the icon, where WebGL isn't available. `onBurst`: called when it bursts (poked
+ * BURST_POKES times in a row while angry), as its blocks fly.
  */
-export function mountNote3d(img: HTMLElement, size = 64): boolean {
+export function mountNote3d(img: HTMLElement, size = 64, onBurst?: () => void): boolean {
   const canvas = document.createElement("canvas");
   let gl: WebGLRenderingContext | null = null;
   try {
@@ -355,14 +565,14 @@ export function mountNote3d(img: HTMLElement, size = 64): boolean {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  let drawn = { open: -1, anger: -1 };
-  const face = (open: number, anger: number) => {
-    if (!faceCtx || (Math.abs(open - drawn.open) < 0.05 && Math.abs(anger - drawn.anger) < 0.02)) return;
-    drawn = { open, anger };
-    drawFace(faceCtx, 256, open, anger);
+  let drawn = { open: -1, anger: -1, envy: -1, crack: -1 };
+  const face = (open: number, anger: number, envy: number, crack = 0) => {
+    if (!faceCtx || (Math.abs(open - drawn.open) < 0.05 && Math.abs(anger - drawn.anger) < 0.02 && Math.abs(envy - drawn.envy) < 0.02 && Math.abs(crack - drawn.crack) < 0.05)) return;
+    drawn = { open, anger, envy, crack };
+    drawFace(faceCtx, 256, open, anger, envy, crack);
     gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA, gl!.RGBA, gl!.UNSIGNED_BYTE, faceCanvas);
   };
-  face(1, 0);
+  face(1, 0, 0);
 
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
@@ -373,6 +583,7 @@ export function mountNote3d(img: HTMLElement, size = 64): boolean {
   const shadowScaleAt = uniform("shadowScale");
   const shadowAlphaAt = uniform("shadowAlpha");
   const angerUniform = uniform("anger");
+  const envyUniform = uniform("envy");
 
   // Leaning towards the pointer, eased.
   let lean = { x: 0, y: 0 };
@@ -384,15 +595,34 @@ export function mountNote3d(img: HTMLElement, size = 64): boolean {
   });
   let flipFrom = -Infinity;
   let pokedAt = -Infinity;
+  let enviedAt = -Infinity;
+  // The Easter egg (D49): pokes in a row while angry; at BURST_POKES it cracks, then bursts.
+  let streak = 0;
+  let crackFrom = -Infinity;
+  let bursting = false;
+  const CRACK_MS = 350;
   let running = false;
   const kick = () => {
     if (running) return;
     running = true;
     requestAnimationFrame(draw);
   };
-  canvas.addEventListener("click", () => {
-    flipFrom = performance.now();
-    kick();
+  // A click flips it, a double-click makes it envious; the click waits a moment to tell them apart.
+  const clicks = sortClicks(
+    () => {
+      flipFrom = performance.now();
+      kick();
+    },
+    () => {
+      const now = performance.now();
+      enviedAt = reenvy(now - enviedAt, now);
+      kick();
+    },
+  );
+  canvas.addEventListener("click", () => clicks.click());
+  canvas.addEventListener("dblclick", (e) => {
+    e.preventDefault(); // no text selection around it
+    clicks.dblclick();
   });
   // Right-click: a poke, not the page's long menu (nothing in it is about the note). Caught on
   // the way down (capture) and stopped there, so no other listener can bring the menu back.
@@ -403,8 +633,34 @@ export function mountNote3d(img: HTMLElement, size = 64): boolean {
       e.preventDefault();
       e.stopImmediatePropagation();
       const now = performance.now();
+      if (bursting) return;
+      streak = pokeStreak(streak, angerAt(now - pokedAt) > 0);
       pokedAt = repoke(now - pokedAt, now);
       kick();
+      if (streak >= BURST_POKES && onBurst) {
+        bursting = true;
+        crackFrom = now;
+        setTimeout(() => {
+          const back = () => {
+            // Back, calm and whole, a moment later.
+            streak = 0;
+            crackFrom = -Infinity;
+            pokedAt = -Infinity;
+            canvas.style.visibility = "";
+            bursting = false;
+            kick();
+          };
+          if (still) {
+            onBurst();
+            setTimeout(back, 800);
+            return;
+          }
+          const rect = canvas.getBoundingClientRect();
+          canvas.style.visibility = "hidden";
+          burst(rect, () => setTimeout(back, 600));
+          setTimeout(onBurst, 450); // the game opens while the blocks fall
+        }, CRACK_MS);
+      }
     },
     true,
   );
@@ -427,20 +683,26 @@ export function mountNote3d(img: HTMLElement, size = 64): boolean {
     // A small jolt as the anger rises.
     const shake = moving && since < RISE_MS ? Math.sin(since / 30) * 0.06 * (1 - since / RISE_MS) : 0;
     const recoil = moving ? anger * 0.35 : 0;
-    // Blinking: every few seconds, quickly (not while angry: it glares).
+    // Double-clicked: envious for a moment; it turns its head away, glancing back sideways.
+    const envious = now - enviedAt;
+    const envy = envyAt(envious);
+    // Blinking: every few seconds, quickly (not while angry or envious: it glares, or sulks).
     const phase = t % 4.2;
-    face(moving && !anger && phase < 0.16 ? Math.abs(phase - 0.08) / 0.08 : 1, anger);
+    const crack = crackAt(now, crackFrom, CRACK_MS);
+    face(moving && !anger && !envy && phase < 0.16 ? Math.abs(phase - 0.08) / 0.08 : 1, anger, envy, crack);
     gl!.uniform1f(angerUniform, anger);
+    gl!.uniform1f(envyUniform, envy);
+    const turnAway = moving ? envy * 0.5 : 0;
 
     const rise = bob + hop;
-    gl!.uniformMatrix4fv(modelAt, false, transform(-0.12 + (moving ? lean.x : 0), sway + (moving ? lean.y : 0) + flip, -0.06 + (moving ? Math.sin(t * 0.9) * 0.04 : 0) + shake, 0, 0.1 + rise, -DISTANCE - recoil));
+    gl!.uniformMatrix4fv(modelAt, false, transform(-0.12 + (moving ? lean.x : 0), sway + (moving ? lean.y : 0) + flip + turnAway, -0.06 + (moving ? Math.sin(t * 0.9) * 0.04 : 0) + shake, 0, 0.1 + rise, -DISTANCE - recoil));
     gl!.uniform1f(shadowScaleAt, 1 - rise * 0.5);
     gl!.uniform1f(shadowAlphaAt, 0.28 - rise * 0.3);
     gl!.clearColor(0, 0, 0, 0);
     gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT);
     gl!.drawArrays(gl!.TRIANGLES, 0, mesh.length / STRIDE);
-    // Still ("reduce motion"): drawn only while a flip or a poke lasts (the user's own request).
-    if (moving || f < 1 || since < ANGRY_MS) requestAnimationFrame(draw);
+    // Still ("reduce motion"): drawn only while a flip, a poke or envy lasts (the user's own request).
+    if (moving || f < 1 || since < ANGRY_MS || envious < ENVY.end || bursting) requestAnimationFrame(draw);
     else running = false;
   };
   kick();

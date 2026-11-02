@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ThunderNotes",
-  "version": "0.78.8",
+  "version": "0.80.3",
   "description": "Highlight text in emails and attach Markdown notes.",
   "icons": {
     "16": "icons/icon.svg",

@@ -14,6 +14,8 @@ between your computers through your own mail server, and stay plain files you ow
 - **Tasks.** Every checklist item in a note (`- [ ] …`) is a task. `@friday` or `@24.10.` gives it
   a date, `#name` a label. A task view collects all tasks from all notes: grouped by date, label or
   email, filtered, with sub-tasks, quick actions and a count of overdue tasks on its button.
+- **All notes at a glance.** A notes overview lists every note, newest first, with search across
+  notes, passages, subjects and senders, and filters by colour and account.
 - **In the message list.** Emails with notes show a post-it, in the table and the cards view; cards
   also show a line of the note on the whole email, in its colour.
 - **Sync without an account.** Notes travel through a `ThunderNotes` folder in each IMAP account,

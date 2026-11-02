@@ -168,6 +168,10 @@ async function main(): Promise<void> {
 $("tasks").addEventListener("click", () => {
   void messenger.runtime.sendMessage({ type: "openTasks" }).finally(() => window.close());
 });
+// The notes overview (D48): every note of every email, in its own tab.
+$("notes").addEventListener("click", () => {
+  void messenger.runtime.sendMessage({ type: "openNotes" }).finally(() => window.close());
+});
 
 for (const id of ["options", "exportNow"]) {
   $(id).addEventListener("click", () => {

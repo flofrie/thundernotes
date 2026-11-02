@@ -3,12 +3,15 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 // Packages the add-on for release (docs/RELEASE.md), after `npm run build`:
-// - build/thundernotes-<version>.xpi: what Thunderbird installs (manifest, pages, built scripts
-//   without source maps, icons, the Experiment, the licence);
+// - build/thundernotes-<version>-atn.xpi: what Thunderbird installs (manifest, pages, built scripts
+//   without source maps, icons, the Experiment, the licence), for addons.thunderbird.net: with the
+//   manifest's highest Thunderbird version, which ATN requires for an Experiment (D41);
+// - build/thundernotes-<version>.xpi: the same without that highest version, for GitHub releases,
+//   so it installs on newer, untested Thunderbird versions too (manifest-variants.mjs);
 // - build/thundernotes-<version>-source.zip: what the review on addons.thunderbird.net needs to
 //   rebuild the bundled scripts: the committed files the build uses (no tests, spikes, scripts or
 //   design documents), with docs/BUILDING.md as its README (versions and the .xpi's checksum filled in).
-// The .xpi is reproducible: files sorted, a fixed date, so every machine builds the same bytes.
+// Both .xpi files are reproducible: files sorted, a fixed date, so every machine builds the same bytes.
 // In a git checkout it refuses uncommitted changes (the source zip would not match the add-on;
 // --allow-dirty overrides). Outside git (a reviewer building from the source zip) it only builds the .xpi.
 
@@ -18,6 +21,7 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "n
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { strToU8, zipSync } from "fflate";
+import { maxVersion, withoutMaxVersion } from "./manifest-variants.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
@@ -78,12 +82,23 @@ const kb = (path) => `${Math.round(statSync(path).size / 1024)} KB`;
 const entries = Object.fromEntries(files.map((f) => [f, readFileSync(join(here, f))]));
 entries.LICENSE = readFileSync(join(root, "LICENSE"));
 mkdirSync(out, { recursive: true });
-const xpi = join(out, `thundernotes-${version}.xpi`);
-const xpiBytes = zip(entries);
-writeFileSync(xpi, xpiBytes);
-const sha256 = createHash("sha256").update(xpiBytes).digest("hex");
-console.log(`package: ${relative(root, xpi)} (${files.length + 1} files, ${kb(xpi)})`);
-console.log(`package: sha256 ${sha256}`);
+const manifestText = readFileSync(join(here, "manifest.json"), "utf8");
+const highest = maxVersion(manifestText);
+if (!highest) fail("manifest.json needs strict_max_version (addons.thunderbird.net requires it, D41)");
+const write = (name, files) => {
+  const path = join(out, name);
+  const bytes = zip(files);
+  writeFileSync(path, bytes);
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  console.log(`package: ${relative(root, path)} (${Object.keys(files).length} files, ${kb(path)})`);
+  console.log(`package: sha256 ${sha}`);
+  return sha;
+};
+// For addons.thunderbird.net: as committed, up to the highest tested version.
+const sha256 = write(`thundernotes-${version}-atn.xpi`, entries);
+// For GitHub releases: no highest version.
+write(`thundernotes-${version}.xpi`, { ...entries, "manifest.json": strToU8(withoutMaxVersion(manifestText)) });
+console.log(`package: the -atn.xpi is for addons.thunderbird.net (Thunderbird up to ${highest}); the other installs on newer versions too`);
 
 if (inGit) {
   // The reviewers' source archive: only what `npm ci && npm run package` needs.

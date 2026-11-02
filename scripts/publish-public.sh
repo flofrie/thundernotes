@@ -11,6 +11,8 @@
 #   scripts/publish-public.sh <version>            show what would be published
 #   scripts/publish-public.sh <version> --push     publish: commit, tag v<version>, and a GitHub
 #                                                  release with build/thundernotes-<version>.xpi
+#                                                  (the package without a highest Thunderbird
+#                                                  version, D41; the -atn.xpi is for ATN)
 set -eu
 
 PUBLIC_URL="https://github.com/flofrie/thundernotes.git"
@@ -74,7 +76,8 @@ echo "publish: pushed $commit to $PUBLIC_REPO (main, v$version)"
 
 xpi="build/thundernotes-$version.xpi"
 if [ -f "$xpi" ]; then
-  gh release create "v$version" "$xpi" -R "$PUBLIC_REPO" --title "ThunderNotes $version" --notes "Install: download the .xpi, then in Thunderbird Tools → Add-ons and Themes → gear icon → Install Add-on From File…"
+  tested=$(sed -n 's/^ *"strict_max_version": *"\([0-9]*\).*/\1/p' packages/thunderbird/manifest.json | head -1)
+  gh release create "v$version" "$xpi" -R "$PUBLIC_REPO" --title "ThunderNotes $version" --notes "Install: download the .xpi, then in Thunderbird Tools → Add-ons and Themes → gear icon → Install Add-on From File… Works with Thunderbird 153 and newer; tested up to $tested. It installs on newer versions too, untested there."
 else
   echo "publish: no $xpi (run npm run package first); no GitHub release made"
 fi

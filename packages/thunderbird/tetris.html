@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ThunderNotes Tetris</title>
+  <link rel="icon" href="icons/icon.svg">
+  <style>
+    :root { color-scheme: light dark; --fg: #1f1f1f; --muted: #6b6b6b; --bg: #f6f7f9; --well: #ffffff; --grid: #0000000c; --line: #00000024; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg: #e8e8e8; --muted: #a0a0a0; --bg: #16181c; --well: #1f2227; --grid: #ffffff0a; --line: #ffffff2e; }
+    }
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; font: 14px/1.45 system-ui, sans-serif;
+           color: var(--fg); background: var(--bg); user-select: none; }
+    .game { display: flex; gap: 22px; align-items: flex-start; padding: 24px; }
+    .side { width: 130px; display: flex; flex-direction: column; gap: 18px; }
+    h2 { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+    canvas { display: block; border-radius: 8px; background: var(--well); box-shadow: 0 0 0 1px var(--line), 0 6px 24px #0002; }
+    .stat { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .keys { font-size: 12px; color: var(--muted); line-height: 1.7; }
+    kbd { display: inline-block; min-width: 1.3em; padding: 0 4px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px;
+          font: 11px/1.5 system-ui, sans-serif; text-align: center; color: var(--fg); }
+    .well { position: relative; }
+    #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+               border-radius: 8px; background: color-mix(in srgb, var(--well) 82%, transparent); backdrop-filter: blur(2px); text-align: center; }
+    #overlay[hidden] { display: none; }
+    #overlay h1 { margin: 0; font-size: 26px; }
+    #overlay p { margin: 0; color: var(--muted); }
+    #overlay img { width: 56px; height: 56px; }
+  </style>
+</head>
+<body>
+  <div class="game">
+    <div class="side">
+      <div><h2>Hold</h2><canvas id="hold" width="130" height="90"></canvas></div>
+      <div><h2>Score</h2><div class="stat" id="score">0</div></div>
+      <div><h2>Lines</h2><div class="stat" id="lines">0</div></div>
+      <div><h2>Level</h2><div class="stat" id="level">1</div></div>
+      <div><h2>Best</h2><div class="stat" id="best">0</div></div>
+    </div>
+    <div class="well">
+      <canvas id="field"></canvas>
+      <div id="overlay">
+        <img src="icons/icon.svg" alt="">
+        <h1 id="title">ThunderNotes Tetris</h1>
+        <p id="message">Press <kbd>Space</kbd> to start</p>
+      </div>
+    </div>
+    <div class="side">
+      <div><h2>Next</h2><canvas id="next" width="130" height="250"></canvas></div>
+      <div class="keys">
+        <kbd>←</kbd> <kbd>→</kbd> move<br>
+        <kbd>↓</kbd> soft drop<br>
+        <kbd>Space</kbd> hard drop<br>
+        <kbd>↑</kbd> <kbd>X</kbd> rotate<br>
+        <kbd>Z</kbd> rotate back<br>
+        <kbd>C</kbd> <kbd>Shift</kbd> hold<br>
+        <kbd>P</kbd> <kbd>Esc</kbd> pause<br>
+        <kbd>R</kbd> restart
+      </div>
+    </div>
+  </div>
+  <script src="dist/tetris.js"></script>
+</body>
+</html>

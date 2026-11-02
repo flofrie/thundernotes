@@ -44,7 +44,7 @@ ThunderNotes is one TypeScript monorepo (D13): a client-independent core, a Thun
 The display script runs inside every shown email, so it stays small (D22): rendering, sync and other heavy code live in the background, and the editor is loaded only when editing starts (D28).
 
 ```text
-Views:         message display script  |  toolbar popup  |  task view  |  options page  |  Notes space tab (phase 3)
+Views:         message display script  |  toolbar popup  |  task view  |  notes overview  |  options page
                                        ⇅
 Background:    the annotation store — IndexedDB · Markdown rendering · IMAP sync engine · merge
                                        ⇅
@@ -340,13 +340,13 @@ The options page groups its settings in cards by area, with switches and live ex
 | Backup | Export (notes as Markdown plus `settings.json`), import, "Also restore settings when importing" (off) (D25) |
 | Developer | Show developer functions (off): "Show match types (debug)" on the header button's menu |
 
-## Search and the Notes space (planned)
+## Search and the notes overview
 
-A Notes space, a full tab opened from Thunderbird's spaces toolbar, will list all notes with full-text search; it is phase 3 and not built yet. Today emails with notes are found through the `$annotated` tag (quick filter, saved searches) and the ThunderNotes column.
+The notes overview (D48, 0.79.0), a tab opened from the spaces toolbar, the ThunderNotes toolbar button's right-click menu or the popup, lists every note, the newest change first, with full-text search. Emails with notes are also found through the `$annotated` tag (quick filter, saved searches) and the ThunderNotes column.
 
-- **Index:** MiniSearch or FlexSearch in the background, rebuilt from the store at any time; note text, quote, tags, the email's subject and sender.
-- **Query:** free text plus filters, e.g. `tag:legal from:anna`.
-- **Results:** note snippet + email subject; a click opens the email and goes to the highlight.
+- **Search:** the task view's expressions over the note, its passage, the email's subject and sender (a label is a word, `#legal`); no index or search library: matching all notes is instant at the sizes seen.
+- **Filters:** colour, account, and whether plain highlights (no note) are listed.
+- **Results:** the note rendered, what it is on, its email and when it changed; a click opens the email with the note ready to edit.
 - **Outside Thunderbird:** the exported or helper-written Markdown folder is searchable with any editor, Spotlight or Obsidian.
 
 Carriers stay out of Thunderbird's own mail search (D19), so notes never show up there.
@@ -478,7 +478,7 @@ Phases 0, 2 and 4 are done, and most of phase 5 (0.75.0): local annotations, IMA
 | 0 Setup | Profile, test mailbox, monorepo, add-on ID, licence | Done |
 | 1 Spikes | Anchoring across views (D21), carrier folder (D19), `messages.import` on own server, Experiment for search exclusion, lazy editor loading | Done, except `messages.import` on Gmail and the optional helper skeleton |
 | 2 MVP: local annotations | Highlights, margin cards, live-preview editor, colours, folding, link popup, whole-email note, toolbar list, tag and column, export/import, printing with notes, lines to highlights | Done |
-| 3 Live files + Notes space | Optional native helper: two-way Markdown folder with file watching, Git repository with debounced auto-commit (D6); Notes space tab with search | Not started |
+| 3 Live files + Notes space | Optional native helper: two-way Markdown folder with file watching, Git repository with debounced auto-commit (D6); Notes space tab with search | Notes overview with search built (D48); the helper not started |
 | 4 IMAP sync | Carriers, revisions and tombstones, three-way merge with conflict boxes, folder restore and re-subscribe, restore of deletions, drafts, sync warning, settings carrier | Done, and tested between two computers (153 ESR, macOS); still open: check the folder on phone, webmail and server |
 | 5 Tasks, links, Notion | Dates and labels, task view with filters, grouping, sub-tasks and quick actions; links between emails with backlinks and a link picker; reminders; Notion two-way sync | Tasks and links done (D37–D40); reminders and Notion not started |
 | Release | Package script, release checklist, public repository with one commit per release | Done: 0.75.0 published |
@@ -488,7 +488,7 @@ Phases 0, 2 and 4 are done, and most of phase 5 (0.75.0): local annotations, IMA
 
 ## Decisions
 
-The binding decisions in one line each, as of D47; `docs/DECISIONS.md` has the full text, dates and rejected options.
+The binding decisions in one line each, as of D48; `docs/DECISIONS.md` has the full text, dates and rejected options.
 
 | Question | Decision | D |
 | --- | --- | --- |
@@ -536,3 +536,4 @@ The binding decisions in one line each, as of D47; `docs/DECISIONS.md` has the f
 | Sync and merge rules | Normative specification `docs/SYNC.md` with scenario tests: bases, merge order, cleanup, editing while sync runs | D45 |
 | Pictures | Whole pictures highlighted or noted from the right-click menu; framed by an outline; found by address, place and surrounding text; optional `image` field in format 2 | D46 |
 | Settings page | In a tab of its own, not inside the Add-ons Manager; right-click shows only "Copy" with text selected | D47 |
+| Notes overview | A tab with every note, newest change first; search with the task view's expressions; colour, account and highlight filters; a click opens the note | D48 |

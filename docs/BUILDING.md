@@ -20,11 +20,12 @@ From the folder this README is in:
 
 ```sh
 npm ci            # installs the exact versions in package-lock.json
-npm run package   # type-checks, bundles, and writes build/thundernotes-{{version}}.xpi
-sha256sum build/thundernotes-{{version}}.xpi
+npm run package   # type-checks, bundles, and writes build/thundernotes-{{version}}-atn.xpi
+sha256sum build/thundernotes-{{version}}-atn.xpi
 ```
 
-The checksum must be:
+The checksum of `thundernotes-{{version}}-atn.xpi`, the file submitted to addons.thunderbird.net,
+must be:
 
 ```
 {{sha256}}
@@ -40,6 +41,8 @@ The checksum must be:
   (`experiments/thundernotes/implementation.js` and `schema.json`, plain JavaScript, not built)
   and `LICENSE`. Files are sorted and carry a fixed date, so the `.xpi` is the same on every
   machine.
+- It also writes `thundernotes-{{version}}.xpi`, the same files with one line less in
+  `manifest.json` (no `strict_max_version`), for the project's GitHub releases.
 
 ## Third-party code in the bundles
 
