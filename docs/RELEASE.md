@@ -74,4 +74,5 @@ Record the exact Thunderbird build, OS, mail server, date, test profile/device s
 | Thunderbird | OS | Mail server | Date | Setup and result |
 | --- | --- | --- | --- | --- |
 | 153 ESR (exact build not recorded) | macOS on both computers (versions not recorded) | The owner's own mail server (IMAP) | 2026-10-18 | Pass. The owner ran the steps in development issue #24: the release checklist above, and notes syncing between two physical computers on the same IMAP accounts. ThunderNotes version not recorded. |
+| 159.0 (build 15926.10.26) | macOS 27.0.1 | The owner's own mail server (IMAP) | 2026-11-04 | Pass, as reported by the owner ("it all works") after the short check of D41 on ThunderNotes 0.80.3 (the GitHub `.xpi`); the exact steps were not recorded. One computer, the `Development` profile. |
 | 158 (exact build not recorded) | Not recorded | Not recorded | Not recorded | Existing development record says 158 was tested; the test scope/result was not recorded. Clean-profile and two-physical-computer evidence is not established by the available record. |

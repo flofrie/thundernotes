@@ -75,6 +75,7 @@ To be converted into GitHub issues and milestones.
 - [x] Label order: most used, A–Z, Z–A or own (dragged), synced (D40, 0.28.0)
 - [ ] Saved views in the task view (filter, grouping, order), if switching contexts is missed
 - [x] (D41) Two packages per release: `-atn.xpi` with the highest tested Thunderbird for addons.thunderbird.net, `.xpi` without it for GitHub releases (installs on newer versions too).
+- [x] (0.80.4, D41) Thunderbird 159 checked by the owner (0.80.3 works); the highest version raised to `159.*`.
 - [x] (0.80.0, D49) Tetris as an experiment: a standard game with the pieces as post-its. 0.80.1: an Easter egg, no menu entry: poke the settings' post-it five times while it's angry and it bursts into blocks, opening the game.
 - [x] (0.80.2, public issue #8) Typing in notes with tbkeys: keys typed in our fields and the note editor stop at our Shadow DOM, so add-ons catching single keys on the Thunderbird window (tbkeys' `unset`) no longer swallow them.
 - [x] (0.79.0, D48) Notes overview with full-text search: a tab listing every note, newest change first; search over notes, passages, subjects and senders with the task view's expressions; colour, account and plain-highlight filters; opens the note on its email. In the spaces bar, the toolbar button's right-click menu and the popup. 0.80.3: right-click as on the settings page (no browser menu; Copy with text selected); the scrollbar's room always kept, here and in the task view, so the page doesn't shift when a filter leaves few entries.

@@ -25,7 +25,7 @@ ThunderNotes must install and work like any other add-on, keep notes as plain po
 | --- | --- |
 | Add-on ID | `thundernotes@webterminate.com`, never to change: updates and local storage are tied to it (D17) |
 | Licence | MPL-2.0, the header in every source file (D18) |
-| Platform | Thunderbird ≥ 153 (the current ESR), MailExtension Manifest V3 (D41); tested on 153 ESR and 158, on macOS |
+| Platform | Thunderbird ≥ 153 (the current ESR), MailExtension Manifest V3 (D41); tested on 153 ESR, 158 and 159, on macOS |
 | Repositories | Public `flofrie/thundernotes`, one commit per release; development in the private `flofrie/thundernotes-dev` (D12) |
 | Distribution | An `.xpi` from `npm run package`, attached to each public release (`docs/RELEASE.md`) |
 | Current version | 0.75.0 |

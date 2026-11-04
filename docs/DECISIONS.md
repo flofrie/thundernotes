@@ -1037,6 +1037,8 @@ The add-on requires Thunderbird 153 or newer (`strict_min_version` in `manifest.
 
 **Two packages (2026-10-21, from the release after 0.78.8, the owner's choice):** ATN requires the highest version, but Thunderbird then refuses to install the add-on on a newer version (or switches it off), until a new maximum is set. So `npm run package` writes two files from the same build: `-atn.xpi` with `strict_max_version`, for addons.thunderbird.net (raise its maximum in the Developer Hub after testing a new version, no new review), and `.xpi` without it, attached to GitHub releases, which installs on any version from 153 and says in its release notes up to which version it was tested. On a newer version the Experiment's parts may fail; the add-on keeps working and Settings says so (#12). Considered: a very high maximum for ATN (may not be accepted, and would hide the tested state).
 
+**159 (2026-11-04, 0.80.4):** Thunderbird updated itself to 159 on the owner's Mac, and the add-on, with its maximum of `158.*`, wouldn't load. The owner checked 0.80.3 on 159 and found everything working; the maximum is now `159.*`.
+
 ## D42 — Notes belong to an email in one account (2026-10-18, accepted; refines D2, D4, D27, D40)
 An email's notes are identified by its Message-ID **and the account it is in**: the same message in a work and a personal account has two independent sets of notes, each synced only through its own account's `ThunderNotes` folder. Each account is its own world: work notes never reach the personal server and the other way round.
 

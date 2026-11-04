@@ -26,7 +26,7 @@ between your computers through your own mail server, and stay plain files you ow
 - **Private.** Nothing leaves your computer except to your own mail server. No analytics or third
   parties. ThunderNotes data is plain text, not end-to-end encrypted by the add-on.
 
-Requires Thunderbird 153 (the current extended-support release, ESR) or newer; tested on 153 ESR and 158 on macOS (Windows and Linux not yet). Emails in local folders and POP accounts can be annotated too,
+Requires Thunderbird 153 (the current extended-support release, ESR) or newer; tested on 153 ESR, 158 and 159 on macOS (Windows and Linux not yet). Emails in local folders and POP accounts can be annotated too,
 but aren't synced (export is their backup).
 
 ## Privacy and encrypted email

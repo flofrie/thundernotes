@@ -27,7 +27,7 @@ This file is the one set of instructions for every agent (Codex, Cursor, Claude 
 - The owner commits as `Florian Friedrich <flofrie@users.noreply.github.com>`; contributors use their own name and email.
 
 ## Status (2026-10-30)
-- Version **0.80.3** on `main`; the public repo has **0.78.8** (released 2026-10-20; the step before 1.0). Build: `npm run build -w @thundernotes/thunderbird`, then load `packages/thunderbird/manifest.json`.
+- Version **0.80.4** on `main`; the public repo has **0.80.3** (released 2026-11-02; the step before 1.0). Build: `npm run build -w @thundernotes/thunderbird`, then load `packages/thunderbird/manifest.json`.
 - Built:
   - **Message list:** the ThunderNotes column, the post-it on cards and a one-line preview of the whole-email note there (D26).
   - **Notes:** highlights and Markdown notes in margin cards with lines to their passages (D23, D24); highlights and notes on pictures (D46); whole-email note; notes in the empty space beside an email's content, narrowing only as needed (D23); live-preview editor (D28); colours (D29); folding (D30); drafts kept on a crash (D34); restore deleted notes (D33); print with notes; copy a task, a note or all notes as Markdown.
@@ -39,8 +39,9 @@ This file is the one set of instructions for every agent (Codex, Cursor, Claude 
   - **Files:** format 2 with separator lines (D25), JSON Schemas in `docs/schemas/`; one markdown-it pipeline for rendering and tasks, kept out of the display script (D22); export and import with `settings.json`, imports repaired instead of failing.
 - The spikes in `spikes/imap-folder/` and `spikes/highlight-anchor/` (results in their READMEs) led to D19 and D21.
 - Tested by the owner in Thunderbird 158 (`Development` profile): re-subscribing (D36), sync warnings (D35), links, backlinks and the link picker (D37, D39), dates and labels, label colours and order, grouping, Done sorting, and 0.47.0 after the format-2 migration.
-- Tested by the owner in Thunderbird 158 during development (2026-10-19/20, 2026-11-02): typing in notes with tbkeys (0.80.2, public issue #8), Tetris and its Easter egg (0.80.1), the settings post-it's envy (0.79.1), the notes overview (0.79.0), the post-it and note previews in the message list's cards view (0.78.8), settings in a tab of their own and the 3D post-it (0.77.x), emails that size their root element (0.75.2).
-- Not yet tested in Thunderbird: the notes overview's right-click and scrollbar (0.80.3), the popup's "Note on this email" always editing (0.75.1), picture notes (0.76.0), notes in the empty space beside the content (0.76.1), quick actions (0.29.0), "Delete for good" in the popup (0.30.0), sub-tasks (0.38.0), and the 0.48.x changes (editing while sync runs, list rendering, the Message-ID notice). Thunderbird 153 ESR, with sync between two physical computers on the same IMAP accounts, was tested by the owner on macOS on 2026-10-18 and works (#24); Windows and Linux aren't tested yet.
+- Tested by the owner in Thunderbird 159 (2026-11-04): 0.80.3 works; the maximum is now `159.*` (D41).
+- Tested by the owner in Thunderbird 158 during development (2026-10-19/20, 2026-11-02): the notes overview's right-click and scrollbar (0.80.3), typing in notes with tbkeys (0.80.2, public issue #8), Tetris and its Easter egg (0.80.1), the settings post-it's envy (0.79.1), the notes overview (0.79.0), the post-it and note previews in the message list's cards view (0.78.8), settings in a tab of their own and the 3D post-it (0.77.x), emails that size their root element (0.75.2).
+- Not yet tested in Thunderbird: the popup's "Note on this email" always editing (0.75.1), picture notes (0.76.0), notes in the empty space beside the content (0.76.1), quick actions (0.29.0), "Delete for good" in the popup (0.30.0), sub-tasks (0.38.0), and the 0.48.x changes (editing while sync runs, list rendering, the Message-ID notice). Thunderbird 153 ESR, with sync between two physical computers on the same IMAP accounts, was tested by the owner on macOS on 2026-10-18 and works (#24); Windows and Linux aren't tested yet.
 
 ## Next steps
 - Open work is in the dev repo's GitHub issues and in `BACKLOG.md`.

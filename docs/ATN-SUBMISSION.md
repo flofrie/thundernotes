@@ -119,7 +119,7 @@ real addresses:
 
 ## 6. Open points to watch
 
-- **Maximum version.** ATN's upload check requires `strict_max_version` for add-ons with an Experiment (it refused the first upload without it). The manifest sets the highest tested version (`158.*`, D41). With each new Thunderbird release: test, then raise the maximum on ATN for the listed version (Developer Hub → the version's compatibility) and in the manifest for the next one.
+- **Maximum version.** ATN's upload check requires `strict_max_version` for add-ons with an Experiment (it refused the first upload without it). The manifest sets the highest tested version (`159.*` since 0.80.4; 0.75.0 was uploaded with `158.*`, D41). With each new Thunderbird release: test, then raise the maximum on ATN for the listed version (Developer Hub → the version's compatibility) and in the manifest for the next one.
 
 - **The name.** The policy asks Thunderbird-branded names to read "… for Thunderbird". "ThunderNotes" doesn't contain the trademark, but a reviewer may comment; fallback: "ThunderNotes – notes and tasks for Thunderbird".
 - **Data-collection declaration.** Firefox now asks extensions to declare data collection in the manifest (`data_collection_permissions`). We found no source saying ATN requires it yet. If the upload check asks, add `"data_collection_permissions": { "required": ["none"] }` under `browser_specific_settings.gecko`.
