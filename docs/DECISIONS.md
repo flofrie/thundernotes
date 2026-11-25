@@ -490,7 +490,7 @@ Choosing:
 - a bar of colour dots after selecting, which replaces the Highlight button (a click highlights in that colour; a small post-it marks the bar as ThunderNotes'; Ctrl/Cmd+Shift+H uses the ringed colour),
 - a colour dot on each card,
 - a row of colours at the top of the right-click menus,
-- a right-click on a highlight (since 2026-10-17 the add-on's own menu, like the cards': colour dots, Add/Edit note, Open link/email, Copy, Remove; Thunderbird's menu shows no icons there and is long; with text selected, Thunderbird's menu still appears, with a Colour submenu of names),
+- a right-click on a highlight (since 2026-10-17 the add-on's own menu, like the cards': colour dots, Add/Edit note, Open link/email, Copy link (since 2026-11-06, 0.80.5: a web address as it is, an email address without `mailto:`, a link to an email as `mid:`), Copy, Remove; Thunderbird's menu shows no icons there and is long; with text selected, Thunderbird's menu still appears, with a Colour submenu of names),
 - and Cmd+Option+1…8 (Ctrl+Alt+1…8) for the active card.
 
 ### Whole-email note (2026-10-16)
@@ -1038,6 +1038,8 @@ The add-on requires Thunderbird 153 or newer (`strict_min_version` in `manifest.
 **Two packages (2026-10-21, from the release after 0.78.8, the owner's choice):** ATN requires the highest version, but Thunderbird then refuses to install the add-on on a newer version (or switches it off), until a new maximum is set. So `npm run package` writes two files from the same build: `-atn.xpi` with `strict_max_version`, for addons.thunderbird.net (raise its maximum in the Developer Hub after testing a new version, no new review), and `.xpi` without it, attached to GitHub releases, which installs on any version from 153 and says in its release notes up to which version it was tested. On a newer version the Experiment's parts may fail; the add-on keeps working and Settings says so (#12). Considered: a very high maximum for ATN (may not be accepted, and would hide the tested state).
 
 **159 (2026-11-04, 0.80.4):** Thunderbird updated itself to 159 on the owner's Mac, and the add-on, with its maximum of `158.*`, wouldn't load. The owner checked 0.80.3 on 159 and found everything working; the maximum is now `159.*`.
+
+**160 (2026-11-25, 0.80.6):** Thunderbird 160.0 (build 20261106235107) is installed on the owner's Mac, and the owner asked for the maximum to be raised before testing. So the order is reversed this time: the maximum is now `160.*`, checked only by reading 160.0's code. Every module and function the Experiment uses (`ThreadPaneColumns`, Gloda's indexing priority, `ExtensionAccounts.getFolder`, `ExtensionSupport`'s window listener, `MailServices.folderLookup`, `threadPane.restoreColumns`) is still there with the same shape, and the 160 release notes list no WebExtension changes. The owner then ran 0.80.6 on 160 and found it working at first glance; should something fail later, the Experiment's parts show the failure in Settings (#12) and the rest keeps working.
 
 ## D42 — Notes belong to an email in one account (2026-10-18, accepted; refines D2, D4, D27, D40)
 An email's notes are identified by its Message-ID **and the account it is in**: the same message in a work and a personal account has two independent sets of notes, each synced only through its own account's `ThunderNotes` folder. Each account is its own world: work notes never reach the personal server and the other way round.

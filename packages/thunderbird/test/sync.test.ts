@@ -856,23 +856,25 @@ describe("IMAP sync between two devices", () => {
   });
 
   it("a purge reaches the other device, which still had the copies (D33)", async () => {
+    // Dates relative to now: sync drops copies deleted more than TOMBSTONE_DAYS ago, so fixed dates expire.
+    const at = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 3600_000).toISOString();
     const server = makeServer();
     const A = await device(server);
     const B = await device(server);
-    const base = { ...initialSet("2026-10-17T10:00:00.000Z"), annotations: [annotation("a1", "first", "2026-10-17T10:00:00.000Z"), annotation("a2", "second", "2026-10-17T10:00:00.000Z")] };
+    const base = { ...initialSet(at(3)), annotations: [annotation("a1", "first", at(3)), annotation("a2", "second", at(3))] };
     await A.act(async () => {
       await A.store.putSet(base);
       A.sync.schedulePush(ACCOUNT, REF);
     });
     await A.act(async () => {
-      const s = deleteAnnotation((await A.store.getSet(ACCOUNT, REF))!, "a1", "2026-10-17T11:00:00.000Z");
+      const s = deleteAnnotation((await A.store.getSet(ACCOUNT, REF))!, "a1", at(2));
       await A.store.putSet({ ...s, rev: s.rev + 1 });
       A.sync.schedulePush(ACCOUNT, REF);
     });
     await B.act(() => B.sync.pull(ACCOUNT));
     expect(restorable(await B.store.getSet(ACCOUNT, REF)).annotations.map((a) => a.id)).toEqual(["a1"]); // B has the copy
     await A.act(async () => {
-      await A.store.putSet(purgeDeleted((await A.store.getSet(ACCOUNT, REF))!, "2026-10-17T12:00:00.000Z"));
+      await A.store.putSet(purgeDeleted((await A.store.getSet(ACCOUNT, REF))!, at(1)));
       A.sync.schedulePush(ACCOUNT, REF);
     });
     await B.act(() => B.sync.pull(ACCOUNT));

@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<!-- A sample email with ThunderNotes' display script and a stand-in for its messages. -->
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="content.css">
+<style>body { font: 15px/1.5 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1f1f1f; margin: 16px 20px; } h3 { font-size: 16px; margin: 20px 0 6px; } ul { padding-left: 22px; }</style>
+</head><body>
+<p>Hi all,</p>
+<p>thanks for a great kick-off yesterday! Here is a short summary of what we agreed, so everyone has the same picture before we start.</p>
+<h3>Timeline</h3>
+<p>After looking at the supplier's dates again, the first milestone moves to the end of January. The pilot with the two branch offices stays in March as planned, and we will review the whole schedule at the end of February.</p>
+<h3>Who does what</h3>
+<ul>
+<li>Jonas will own the data migration, with support from the platform team.</li>
+<li>Priya takes over the interfaces to the booking system.</li>
+<li>I'll coordinate with the suppliers and keep the budget overview up to date.</li>
+</ul>
+<h3>Next steps</h3>
+<p>We'll meet again for a two-day workshop in the week of 17 November to go through the detailed design. I'll send the revised timeline by Friday; please add your open questions to the shared list before then.</p>
+<p>The slides from yesterday are attached. Let me know if anything is missing.</p>
+<p>Best regards,<br>Mara</p>
+<p style="color:#777;font-size:13px">Mara Lindqvist · Project lead, Lighthouse</p>
+<script src="clock.js"></script>
+<script src="render.js"></script>
+<script>
+(function () {
+  const d = (s) => new Date(s).toISOString();
+  const hl = (id, exact, colour, md, updated) => ({ id, selectors: [{ type: "TextQuoteSelector", exact }], colour, bodyMd: md, created: d(updated), updated: d(updated), textUpdated: d(updated) });
+  const set = {
+    version: 1, rev: 1, created: d("2026-11-10T09:30"), updated: d("2026-11-12T08:40"),
+    email: { messageId: "kickoff@example.org", subject: "Project Lighthouse: kick-off notes", from: "Mara Lindqvist <mara@example.org>", date: d("2026-11-10T09:12"), accountId: "account1" },
+    emailNoteMd: "## Follow-up\n- [ ] Send the revised timeline to Mara @2026-11-13 #lighthouse\n- [ ] Book the workshop room @2026-11-17 #lighthouse\n- [x] Share the kick-off slides ✅ 2026-11-11",
+    emailNoteColour: "yellow", emailNoteUpdated: d("2026-11-12T08:40"),
+    annotations: [
+      hl("k1", "the first milestone moves to the end of January", "orange", "That's **three weeks** later than planned — check the budget impact.\n- [ ] Ask finance about Q1 @2026-11-14 #budget", "2026-11-11T16:05"),
+      hl("k2", "Jonas will own the data migration", "green", "Good. He did the last one too.", "2026-11-10T10:30"),
+      hl("k3", "a two-day workshop", "blue", "", "2026-11-10T10:32"),
+      hl("k4", "add your open questions to the shared list", "pink", "Mine: who signs off the data model?", "2026-11-10T10:40"),
+    ],
+  };
+  const labelSettings = { account1: { version: 1, labelColours: { lighthouse: { colour: "orange", updated: "2026-11-01T00:00:00Z" }, budget: { colour: "red", updated: "2026-11-01T00:00:00Z" } } } };
+  const STORAGE = { labelSettings, hideCurrentYear: true, linesScreen: true };
+  const noop = { addListener() {}, removeListener() {} };
+  window.browser = window.messenger = {
+    runtime: {
+      sendMessage: async (m) => {
+        switch (m?.type) {
+          case "load": return { set, debug: false, marginCollapsed: false, marginWidth: null, carrier: false, folded: [], ref: "kickoff@example.org", accountId: "account1" };
+          case "render": return window.__render(m.md);
+          case "labels": return ["lighthouse", "budget"];
+          case "backlinks": return [];
+          default: return undefined;
+        }
+      },
+      onMessage: noop, getURL: (p) => new URL(p, location.href).href,
+    },
+    storage: { local: { get: async (k) => { const keys = k == null ? Object.keys(STORAGE) : typeof k === "string" ? [k] : Array.isArray(k) ? k : Object.keys(k); const o = {}; for (const x of keys) if (x in STORAGE) o[x] = STORAGE[x]; return o; }, set: async () => {} }, onChanged: noop },
+  };
+  const s = document.createElement("script");
+  s.src = "dist/content.js";
+  document.body.append(s);
+})();
+</script>
+</body></html>

@@ -29,6 +29,7 @@ import { COLOUR_NAMES, DEFAULT_COLOUR, colourOf, darker, hasConflict, labelColou
 import { CARD_CSS, type Draft } from "./card.js";
 import { openForEditing } from "./focus-edit.js";
 import { keepTypingInside } from "./keep-typing.js";
+import { linkItems } from "./link-items.js";
 import { cardMiddle, lineBands, passageMiddle } from "./connectors.js";
 import { MOD, SWATCH_CSS, colourItem, openMenu, swatch, type MenuItem } from "./edit-menu.js";
 import { EMAIL_NOTE_ID, MARGIN_CSS, Margin, emailNoteAnnotation, type CardBox, type CardStatus } from "./margin.js";
@@ -861,7 +862,7 @@ function openHighlightMenu(mark: HTMLElement, e: MouseEvent): void {
   const items: MenuItem[] = [
     colourItem(colourOf(annotation.colour).name, (name) => void setColour(id, name)),
     { label: annotation.bodyMd ? "Edit note" : "Add note", separator: true, run: () => void openCard(id) },
-    ...(href ? [{ label: /^mid:/i.test(href) ? "Open email" : "Open link", run: () => void send({ type: "openLink", url: href }) }] : []),
+    ...linkItems(href, (url) => void send({ type: "openLink", url }), (text) => void send({ type: "writeClipboard", text })),
     ...(text ? [{ label: "Copy", kbd: `${MOD}C`, run: () => send({ type: "writeClipboard", text }) }] : []),
     ...(annotation.bodyMd ? [{ label: "Copy note as Markdown", run: () => void send({ type: "copyMarkdown", what: "note", id, md: annotation.bodyMd }) }] : []),
     { label: annotation.bodyMd ? "Delete note and highlight" : mark.tagName === "IMG" ? "Remove highlight from picture" : "Remove highlight", danger: true, separator: true, run: () => removeHighlight(id) },
